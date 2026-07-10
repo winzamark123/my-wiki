@@ -17,7 +17,20 @@ Private, single-user, tailored to what *I* want to read and explore. Intersectio
 2. **Wiki** — synthesized markdown articles. Mutable, densely internally-linked, written in blog/article voice (narrative, readable — not terse notes). One representation serves both human reading and LLM context.
 3. **Schema** — a config document defining page conventions, linking rules, voice, and the ingest/query/lint workflows. Turns the LLM into a disciplined wiki maintainer.
 
-Everything is markdown in git. Version history = free revert for auto-committed changes.
+Everything is markdown. **R2 holds the live copy** (what the app serves); **git is the async mirror** (history, revert, changelog, and a cloneable snapshot for offline/heavy maintenance). Writes go to R2 first — visible in seconds, no deploy — and commit to GitHub in the background.
+
+### Serving model
+
+- **Content path**: input → Worker synthesizes → writes `.md` to R2 → purges page cache → toast. Git commit trails asynchronously.
+- **Read path**: request → cached HTML if present → else Worker reads markdown from R2, renders to HTML, caches at the edge. Reading feels static; no LLM, no build step.
+- **Code path**: template/CSS/Worker changes deploy via git push. Content never waits on a deploy.
+- Graph/index JSON regenerates on write, stored in R2.
+
+### How the LLM accesses content
+
+No sandbox, no vector DB. The agent is a tool-use loop inside the Worker with tools backed by R2: `read_index()`, `read_page(slug)`, `write_page(slug, content)`. Traversal mirrors human navigation: read `index.md` (the whole map fits in context at personal-wiki scale), open relevant pages, follow their internal links outward. The frontloaded `[[wiki-links]]` are the retrieval graph for the LLM, not just navigation for the reader.
+
+Synthesis jobs (multi-step: read pages, web search, write several files) run as queue consumers / Workflows — the input-box request enqueues and returns instantly; the job fires the toast when done. Same machinery for red-link generation and lint. For heavy one-off maintenance, clone the git mirror and run an agent against the filesystem locally.
 
 ## Surfaces
 
