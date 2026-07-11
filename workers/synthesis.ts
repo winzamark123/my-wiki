@@ -1,5 +1,10 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+import type {
+  FunctionTool,
+  ResponseFunctionToolCall,
+  ResponseInput,
+} from "openai/resources/responses/responses";
 import { z } from "zod";
 
 import { appendLog, getIndex, getPage, slugify, writePage } from "../app/lib/wiki.server";
@@ -37,21 +42,73 @@ const writePageInput = z.object({
   content: z.string().describe("full markdown content with frontmatter"),
 });
 
-// cast: z.toJSONSchema emits a plain JSON schema object, typed more broadly than the SDK's InputSchema
-const TOOLS: Anthropic.Tool[] = [
+const TOOLS = [
   {
+    type: "function",
     name: "read_page",
     description:
       "Read a wiki page's raw markdown (including frontmatter) by slug. Returns 'not found' if it doesn't exist.",
-    input_schema: z.toJSONSchema(readPageInput) as Anthropic.Tool.InputSchema,
+    parameters: z.toJSONSchema(readPageInput),
+    strict: true,
   },
   {
+    type: "function",
     name: "write_page",
     description:
       "Create or replace a wiki page. Content must be complete markdown including frontmatter (title, optional aliases).",
-    input_schema: z.toJSONSchema(writePageInput) as Anthropic.Tool.InputSchema,
+    parameters: z.toJSONSchema(writePageInput),
+    strict: true,
   },
-];
+] satisfies FunctionTool[];
+
+const statusSchema = z.enum(["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]);
+const itemStatusSchema = z.enum(["in_progress", "completed", "incomplete"]);
+const callerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("direct") }),
+  z.object({ type: z.literal("program"), caller_id: z.string() }),
+]);
+const responseOutputSchema = z.discriminatedUnion("type", [
+  z.object({
+    id: z.string(),
+    type: z.literal("reasoning"),
+    summary: z.array(z.object({ type: z.literal("summary_text"), text: z.string() })),
+    content: z.array(z.object({ type: z.literal("reasoning_text"), text: z.string() })).optional(),
+    encrypted_content: z.string().nullable().optional(),
+    status: itemStatusSchema.optional(),
+  }),
+  z.object({
+    id: z.string().optional(),
+    type: z.literal("function_call"),
+    call_id: z.string(),
+    name: z.string(),
+    arguments: z.string(),
+    caller: callerSchema.nullable().optional(),
+    namespace: z.string().optional(),
+    status: itemStatusSchema.optional(),
+  }),
+  z.object({
+    id: z.string(),
+    type: z.literal("message"),
+    role: z.literal("assistant"),
+    status: itemStatusSchema,
+    phase: z.enum(["commentary", "final_answer"]).nullable().optional(),
+    content: z.array(
+      z.discriminatedUnion("type", [
+        z.object({
+          type: z.literal("output_text"),
+          text: z.string(),
+          annotations: z.array(z.never()),
+        }),
+        z.object({ type: z.literal("refusal"), refusal: z.string() }),
+      ]),
+    ),
+  }),
+]);
+const responseSchema = z.object({
+  status: statusSchema,
+  output: z.array(responseOutputSchema),
+  outputText: z.string(),
+});
 
 export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> {
   async run(event: WorkflowEvent<SynthesisParams>, step: WorkflowStep) {
@@ -69,7 +126,7 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
       };
     });
 
-    const messages: Anthropic.MessageParam[] = [
+    const input: ResponseInput = [
       {
         role: "user",
         content: [
@@ -83,50 +140,64 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
       },
     ];
 
-    const client = new Anthropic({
-      apiKey: this.env.ANTHROPIC_API_KEY,
-      baseURL: this.env.ANTHROPIC_BASE_URL,
+    const client = new OpenAI({
+      apiKey: this.env.CF_AIG_TOKEN,
+      baseURL: this.env.OPENAI_BASE_URL,
+      maxRetries: 0,
+      defaultHeaders: {
+        Authorization: null,
+        "cf-aig-authorization": `Bearer ${this.env.CF_AIG_TOKEN}`,
+        "cf-aig-skip-cache": "true",
+        "cf-aig-collect-log-payload": "false",
+      },
     });
     const written: string[] = [];
 
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       // JSON round-trip because step results must satisfy Workflows' Serializable type
       const responseJson = await step.do(`llm turn ${turn}`, async () => {
-        const result = await client.messages.create({
-          model: this.env.ANTHROPIC_MODEL,
-          max_tokens: 16000,
-          thinking: { type: "adaptive" },
-          system: SYSTEM_PROMPT,
+        const result = await client.responses.create({
+          model: this.env.OPENAI_MODEL,
+          instructions: SYSTEM_PROMPT,
+          input,
           tools: TOOLS,
-          messages,
+          max_output_tokens: 16000,
+          reasoning: { effort: "medium" },
+          store: false,
+          include: ["reasoning.encrypted_content"],
         });
-        return JSON.stringify({ content: result.content, stop_reason: result.stop_reason });
+        return JSON.stringify({
+          status: result.status ?? "completed",
+          output: result.output,
+          outputText: result.output_text,
+        });
       });
-      const response: Pick<Anthropic.Message, "content" | "stop_reason"> = JSON.parse(responseJson);
+      const response = responseSchema.parse(JSON.parse(responseJson));
 
-      messages.push({ role: "assistant", content: response.content });
+      if (response.status !== "completed") {
+        throw new Error(`OpenAI response ended with status ${response.status}`);
+      }
 
-      if (response.stop_reason !== "tool_use") {
-        const report = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("\n");
+      input.push(...response.output);
+      const toolCalls = response.output.filter((item) => item.type === "function_call");
+
+      if (toolCalls.length === 0) {
+        const report = response.outputText || "Synthesis completed without a report.";
         await step.do("log", () =>
           appendLog(this.env.WIKI, `synthesis: ${report.slice(0, 300)}`),
         );
         return { written, report };
       }
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of response.content) {
-        if (block.type !== "tool_use") continue;
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          ...(await this.runTool(block, step, turn, written)),
+      for (const call of toolCalls) {
+        const output = await this.runTool(call, step, turn, written);
+        input.push({
+          type: "function_call_output",
+          call_id: call.call_id,
+          output,
+          ...(call.caller ? { caller: call.caller } : {}),
         });
       }
-      messages.push({ role: "user", content: toolResults });
     }
 
     await step.do("log max turns", () =>
@@ -136,34 +207,48 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
   }
 
   private async runTool(
-    block: Anthropic.ToolUseBlock,
+    call: ResponseFunctionToolCall,
     step: WorkflowStep,
     turn: number,
     written: string[],
-  ): Promise<{ content: string; is_error?: boolean }> {
-    if (block.name === "read_page") {
-      const input = readPageInput.safeParse(block.input);
-      if (!input.success) return { content: `invalid input: ${input.error.message}`, is_error: true };
+  ) {
+    const parsedArguments = parseJson(call.arguments);
+    if (!parsedArguments.success) return `invalid JSON input: ${parsedArguments.error}`;
+
+    if (call.name === "read_page") {
+      const input = readPageInput.safeParse(parsedArguments.data);
+      if (!input.success) return `invalid input: ${input.error.message}`;
       const slug = slugify(input.data.slug);
-      const content = await step.do(`read ${slug} (turn ${turn}, ${block.id})`, async () => {
+      return step.do(`read ${slug} (turn ${turn}, ${call.call_id})`, async () => {
         const obj = await this.env.WIKI.get(`wiki/${slug}.md`);
         return obj ? await obj.text() : "not found";
       });
-      return { content };
     }
 
-    if (block.name === "write_page") {
-      const input = writePageInput.safeParse(block.input);
-      if (!input.success) return { content: `invalid input: ${input.error.message}`, is_error: true };
+    if (call.name === "write_page") {
+      const input = writePageInput.safeParse(parsedArguments.data);
+      if (!input.success) return `invalid input: ${input.error.message}`;
       const slug = slugify(input.data.slug);
-      const content = await step.do(`write ${slug} (turn ${turn}, ${block.id})`, async () => {
+      const output = await step.do(`write ${slug} (turn ${turn}, ${call.call_id})`, async () => {
         await writePage({ bucket: this.env.WIKI, slug, content: input.data.content });
         return `wrote ${slug}`;
       });
       if (!written.includes(slug)) written.push(slug);
-      return { content };
+      return output;
     }
 
-    return { content: `unknown tool: ${block.name}`, is_error: true };
+    return `unknown tool: ${call.name}`;
+  }
+}
+
+function parseJson(value: string) {
+  try {
+    const data: unknown = JSON.parse(value);
+    return { success: true as const, data };
+  } catch (error) {
+    return {
+      success: false as const,
+      error: error instanceof Error ? error.message : "unknown JSON parse error",
+    };
   }
 }

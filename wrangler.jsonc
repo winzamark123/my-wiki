@@ -5,8 +5,12 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "wiki-app",
+	"account_id": "e62b5d31403985d71d0a4faae9948728",
 	"compatibility_date": "2026-07-11",
 	"main": "./workers/app.ts",
+	// keep write routes unreachable until a custom domain is protected by Access
+	"workers_dev": false,
+	"preview_urls": false,
 	"observability": {
 		"enabled": true
 	},
@@ -28,8 +32,7 @@
 		}
 	],
 	"vars": {
-		// override via .dev.vars / secrets; AI Gateway slots in by changing the base URL
-		"ANTHROPIC_BASE_URL": "https://api.anthropic.com",
-		"ANTHROPIC_MODEL": "claude-opus-4-8"
+		"OPENAI_BASE_URL": "https://gateway.ai.cloudflare.com/v1/e62b5d31403985d71d0a4faae9948728/my-wiki/openai",
+		"OPENAI_MODEL": "gpt-5.6-terra"
 	}
 }

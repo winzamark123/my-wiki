@@ -1,2 +1,5 @@
-# copy to .dev.vars for local dev; in production set via `wrangler secret put`
-ANTHROPIC_API_KEY=sk-ant-...
+# AI Gateway Run token; the OpenAI key stays in Cloudflare BYOK
+CF_AIG_TOKEN=cfat_...
+
+# for the local mock only:
+# OPENAI_BASE_URL=http://localhost:8788

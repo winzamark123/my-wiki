@@ -7,7 +7,7 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 - **App**: React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`
 - **Content store**: R2 (markdown, images, index/graph JSON) — the live copy
 - **Jobs**: Cloudflare Workflows (synthesis, red-link generation, Matter polling, lint, digest)
-- **LLM**: Anthropic API behind Cloudflare AI Gateway (caching, logging, spend caps)
+- **LLM**: GPT-5.6 Terra via OpenAI Responses and Cloudflare AI Gateway BYOK (direct OpenAI billing, metadata-only gateway logs)
 - **Read caching**: Workers Cache (`"cache": {"enabled": true}`) driven by `Cache-Control` headers
 - **Auth**: Cloudflare Access on write endpoints and private paths; wiki pages publicly readable
 - **Email**: Cloudflare Email Service `send_email` binding (digest)
@@ -23,7 +23,7 @@ Worker (React Router SSR)
    └─ toast: UI polls workflow status endpoint
    
 Workflows (one durable step per LLM call / R2 read / R2 write / web fetch)
-   ├─ LLM calls → AI Gateway → Anthropic
+   ├─ LLM calls → AI Gateway → OpenAI Responses
    └─ on finish: write pages via the write seam, regenerate index.json + sitemap, purge cache
 
 Write seam (single function all writes go through)
@@ -62,7 +62,7 @@ sitemap.xml             regenerated on write, from index.json
 
 Every background job is a Workflow. Rationale:
 
-- Jobs are multi-step agent loops (read index → read pages → several Anthropic calls → write several files). Each action is a `step.do` checkpoint — a flake at step 6 doesn't redo steps 1–5. A Queue consumer would retry the whole job.
+- Jobs are multi-step agent loops (read index → read pages → several OpenAI calls → write several files). Each action is a `step.do` checkpoint — a flake at step 6 doesn't redo steps 1–5. A Queue consumer would retry the whole job.
 - Wall-clock per step is unlimited and awaiting an LLM response costs no CPU. Dynamic step counts (agent decides how many turns) are explicitly supported.
 - Cron is built in: workflow bindings take a `schedules` array — Matter polling, lint, and digest are cron expressions, no scheduled handler.
 - Constraint to design around: step params/results must be serializable and ≤ 1 MiB — carry slugs and summaries between steps, not blobs.
@@ -78,7 +78,7 @@ Workflows in v1:
 
 ## LLM access
 
-The agent is a tool-use loop inside a Workflow with R2-backed tools (`read_index`, `read_page`, `write_page`) — no vector DB, no sandbox (per DESIGN.md). Calls go through **AI Gateway** to Anthropic: spend caps matter because background jobs (eager red-link generation especially) spend tokens unwatched; logging gives observability for free.
+The agent is a tool-use loop inside a Workflow with R2-backed tools (`read_index`, `read_page`, `write_page`) — no vector DB, no sandbox (per DESIGN.md). Calls use the OpenAI Responses API through an authenticated **AI Gateway**. The OpenAI service key lives in Cloudflare Secrets Store as the gateway's `default` BYOK key, so the Worker holds only a scoped AI Gateway Run token and OpenAI bills the project directly. Responses use `store: false`; gateway caching is bypassed and logs retain request metadata without prompt or response payloads.
 
 ## Auth & visibility
 
@@ -119,5 +119,5 @@ Two unrelated git repos:
 ## Open design problems (not blockers)
 
 - **Dedup/alias resolution** (DESIGN.md calls it the hard problem): lean — aliases in page frontmatter, flattened alias→slug map in index.json, every link the synthesizer writes resolves against it via a cheap-model pass. Needs its own design pass before milestone 2.
-- **Eager red-link generation cost dial**: AI Gateway spend caps make experimentation safe; consider "eager only for pages opened from the graph" if cost bites.
+- **Eager red-link generation cost dial**: consider "eager only for pages opened from the graph" if cost bites; provider-side project limits are the billing backstop.
 - DESIGN.md's open trio: digest cadence, Matter auto-ingest vs confirm, highlight popup actions.
