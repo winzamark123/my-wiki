@@ -1,0 +1,35 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "wiki-app",
+	"compatibility_date": "2026-07-11",
+	"main": "./workers/app.ts",
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": ["nodejs_compat"],
+	// edge-caches responses per Cache-Control headers; hits skip the Worker
+	"cache": { "enabled": true },
+	"r2_buckets": [
+		{
+			"binding": "WIKI",
+			"bucket_name": "my-wiki"
+		}
+	],
+	"workflows": [
+		{
+			"name": "synthesis",
+			"binding": "SYNTHESIS_WORKFLOW",
+			"class_name": "SynthesisWorkflow"
+		}
+	],
+	"vars": {
+		// override via .dev.vars / secrets; AI Gateway slots in by changing the base URL
+		"ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+		"ANTHROPIC_MODEL": "claude-opus-4-8"
+	}
+}
