@@ -7,7 +7,7 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 - **App**: React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`
 - **Content store**: R2 (markdown, images, index/graph JSON) — the live copy
 - **Jobs**: Cloudflare Workflows (synthesis, red-link generation, Matter polling, lint, digest)
-- **LLM**: GPT-5.6 Terra via OpenAI Responses and Cloudflare AI Gateway BYOK (direct OpenAI billing, metadata-only gateway logs)
+- **LLM**: GPT-5.6 Sol with high reasoning via OpenAI Responses and Cloudflare AI Gateway BYOK (direct OpenAI billing, metadata-only gateway logs)
 - **Read caching**: Workers Cache (`"cache": {"enabled": true}`) driven by `Cache-Control` headers
 - **Auth**: Cloudflare Access on write endpoints and private paths; wiki pages publicly readable
 - **Email**: Cloudflare Email Service `send_email` binding (digest)

@@ -162,7 +162,7 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
           input,
           tools: TOOLS,
           max_output_tokens: 16000,
-          reasoning: { effort: "medium" },
+          reasoning: { effort: "high" },
           store: false,
           include: ["reasoning.encrypted_content"],
         });

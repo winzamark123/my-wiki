@@ -63,7 +63,8 @@ http
         req.headers["cf-aig-authorization"] !== "Bearer mock-token-local-test" ||
         req.headers["cf-aig-skip-cache"] !== "true" ||
         req.headers["cf-aig-collect-log-payload"] !== "false" ||
-        request.model !== "gpt-5.6-terra" ||
+        request.model !== "gpt-5.6-sol" ||
+        request.reasoning?.effort !== "high" ||
         request.store !== false;
       if (invalidRequest) {
         res.writeHead(400, { "content-type": "application/json" });
@@ -87,7 +88,7 @@ http
           object: "response",
           created_at: Math.floor(Date.now() / 1000),
           status: "completed",
-          model: "gpt-5.6-terra",
+          model: "gpt-5.6-sol",
           output: scripted.output,
           output_text: outputText,
         }),

@@ -12,7 +12,7 @@ pnpm dev                         # http://localhost:5173
 curl -X POST localhost:5173/api/reindex   # rebuild index.json after seeding
 ```
 
-Real synthesis calls use GPT-5.6 Terra through the authenticated `my-wiki` AI Gateway. The OpenAI service key is stored as the gateway's `default` BYOK provider key; it is not a Worker secret and does not belong in `.dev.vars`.
+Real synthesis calls use GPT-5.6 Sol with high reasoning through the authenticated `my-wiki` AI Gateway. The OpenAI service key is stored as the gateway's `default` BYOK provider key; it is not a Worker secret and does not belong in `.dev.vars`.
 
 ### Testing without provider credentials
 
