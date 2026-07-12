@@ -2,14 +2,13 @@ import { env } from "cloudflare:workers";
 import { data } from "react-router";
 
 import type { Route } from "./+types/api.red-link";
+import { INTERNAL_HEADER } from "../../workers/resumable-stream";
 import { createRedLinkGenerationResponse } from "~/lib/red-link.server";
 import { slugify } from "~/lib/wiki";
 
-const INTERNAL_HEADER = "X-Resumable-Internal";
-
 function parseSlug(value: string) {
   const slug = slugify(value);
-  return slug && slug === value ? slug : null;
+  return slug === value ? slug : null;
 }
 
 export async function loader({ request, params }: Route.LoaderArgs) {

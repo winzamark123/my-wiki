@@ -7,8 +7,9 @@ import type {
 } from "openai/resources/responses/responses";
 import { z } from "zod";
 
-import { slugify } from "../app/lib/wiki";
-import { appendLog, getIndex, getPage, writePage } from "../app/lib/wiki.server";
+import { gatewayHeaders } from "../app/lib/ai-gateway";
+import { indexForPrompt, slugify } from "../app/lib/wiki";
+import { appendLog, getIndex, getPage, getPageRaw, writePage } from "../app/lib/wiki.server";
 
 export interface SynthesisParams {
   text: string;
@@ -121,7 +122,7 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
         contextSlug ? getPage(this.env.WIKI, contextSlug) : null,
       ]);
       return {
-        index: JSON.stringify(index.pages.map(({ slug, title, summary }) => ({ slug, title, summary }))),
+        index: JSON.stringify(indexForPrompt(index)),
         aliases: JSON.stringify(index.aliases),
         currentPage: currentPage ? `# ${currentPage.title} (${currentPage.slug})\n\n${currentPage.body}` : null,
       };
@@ -145,12 +146,7 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
       apiKey: this.env.CF_AIG_TOKEN,
       baseURL: this.env.OPENAI_BASE_URL,
       maxRetries: 0,
-      defaultHeaders: {
-        Authorization: null,
-        "cf-aig-authorization": `Bearer ${this.env.CF_AIG_TOKEN}`,
-        "cf-aig-skip-cache": "true",
-        "cf-aig-collect-log-payload": "false",
-      },
+      defaultHeaders: { Authorization: null, ...gatewayHeaders(this.env) },
     });
     const written: string[] = [];
 
@@ -220,10 +216,10 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
       const input = readPageInput.safeParse(parsedArguments.data);
       if (!input.success) return `invalid input: ${input.error.message}`;
       const slug = slugify(input.data.slug);
-      return step.do(`read ${slug} (turn ${turn}, ${call.call_id})`, async () => {
-        const obj = await this.env.WIKI.get(`wiki/${slug}.md`);
-        return obj ? await obj.text() : "not found";
-      });
+      return step.do(
+        `read ${slug} (turn ${turn}, ${call.call_id})`,
+        async () => (await getPageRaw(this.env.WIKI, slug)) ?? "not found",
+      );
     }
 
     if (call.name === "write_page") {

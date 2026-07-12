@@ -4,7 +4,13 @@ import { data } from "react-router";
 import type { Route } from "./+types/api.jobs";
 import type { SynthesisResult } from "../../workers/synthesis";
 
-// maps Workflow statuses to an app-owned contract so the UI doesn't depend on the job mechanism
+// the app-owned contract the UI polls, so it doesn't depend on the job mechanism
+export type JobStatus =
+  | { state: "running" }
+  | { state: "done"; result: SynthesisResult }
+  | { state: "failed" };
+
+// maps Workflow statuses to that contract
 export async function loader({ params }: Route.LoaderArgs) {
   try {
     const instance = await env.SYNTHESIS_WORKFLOW.get(params.id);

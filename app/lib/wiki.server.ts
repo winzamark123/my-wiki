@@ -2,9 +2,10 @@
 
 import {
   parseFrontmatter,
+  resolveSlug,
   slugify,
   wikiIndexSchema,
-  WIKI_LINK_RE,
+  WIKI_LINK_RE_G,
   type WikiIndex,
 } from "./wiki";
 
@@ -12,16 +13,22 @@ export const CACHE_HEADERS = { "Cache-Control": "public, max-age=0, s-maxage=60"
 
 function extractWikiLinks(body: string) {
   const links = new Set<string>();
-  for (const m of body.matchAll(new RegExp(WIKI_LINK_RE.source, "g"))) {
+  for (const m of body.matchAll(WIKI_LINK_RE_G)) {
     links.add(slugify(m[1]));
   }
   return [...links];
 }
 
-export async function getPage(bucket: R2Bucket, slug: string) {
+// raw page markdown including frontmatter; null when missing
+export async function getPageRaw(bucket: R2Bucket, slug: string) {
   const obj = await bucket.get(`wiki/${slug}.md`);
-  if (!obj) return null;
-  const { attrs, body } = parseFrontmatter(await obj.text());
+  return obj ? obj.text() : null;
+}
+
+export async function getPage(bucket: R2Bucket, slug: string) {
+  const raw = await getPageRaw(bucket, slug);
+  if (raw === null) return null;
+  const { attrs, body } = parseFrontmatter(raw);
   return { slug, title: attrs.title ?? slug, body };
 }
 
@@ -36,10 +43,7 @@ function summarize(body: string) {
     .split("\n\n")
     .map((p) => p.trim())
     .find((p) => p && !p.startsWith("#"));
-  const text = (para ?? "").replace(
-    new RegExp(WIKI_LINK_RE.source, "g"),
-    (_, target, label) => label ?? target,
-  );
+  const text = (para ?? "").replace(WIKI_LINK_RE_G, (_, target, label) => label ?? target);
   return text.length > 200 ? text.slice(0, 197) + "…" : text;
 }
 
@@ -66,7 +70,7 @@ export async function regenerateIndex(bucket: R2Bucket) {
   }
   // resolve after all aliases are known, so index edges match rendered links
   for (const page of index.pages) {
-    page.links = [...new Set(rawLinks[page.slug].map((l) => index.aliases[l] ?? l))];
+    page.links = [...new Set(rawLinks[page.slug].map((l) => resolveSlug(l, index.aliases)))];
   }
 
   index.pages.sort((a, b) => a.title.localeCompare(b.title));

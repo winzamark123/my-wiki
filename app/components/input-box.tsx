@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
 import type { SynthesisResult } from "../../workers/synthesis";
+import type { JobStatus } from "~/routes/api.jobs";
 
 const POLL_INTERVAL_MS = 2500;
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -15,8 +16,8 @@ async function pollJob(id: string): Promise<SynthesisResult> {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     const res = await fetch(`/api/jobs/${id}`);
     if (!res.ok) throw new Error("job status unavailable");
-    const job = await res.json<{ state: string; result?: SynthesisResult }>();
-    if (job.state === "done" && job.result) return job.result;
+    const job = await res.json<JobStatus>();
+    if (job.state === "done") return job.result;
     if (job.state === "failed") throw new Error("synthesis failed");
   }
   throw new Error("synthesis timed out");

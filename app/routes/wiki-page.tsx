@@ -4,6 +4,7 @@ import { data, Link } from "react-router";
 import type { Route } from "./+types/wiki-page";
 import { RedLinkPage } from "~/components/red-link-page";
 import { renderMarkdown } from "~/lib/markdown.server";
+import { referringPages } from "~/lib/wiki";
 import { CACHE_HEADERS, getIndex, getPage } from "~/lib/wiki.server";
 
 export function meta({ loaderData }: Route.MetaArgs) {
@@ -22,7 +23,7 @@ export async function loader({ params }: Route.LoaderArgs) {
   ]);
   if (!page) {
     // missing targets generate only after this page hydrates, never from a crawler GET
-    const isRedLink = index.pages.some((entry) => entry.links.includes(params.slug));
+    const isRedLink = referringPages(index, params.slug).length > 0;
     return data(
       { slug: params.slug, title: null, html: null, index, isRedLink },
       { status: 404, headers: { "Cache-Control": "no-store" } },
@@ -38,7 +39,7 @@ export async function loader({ params }: Route.LoaderArgs) {
 }
 
 export default function WikiPage({ loaderData }: Route.ComponentProps) {
-  const { slug, title, html } = loaderData;
+  const { slug, html } = loaderData;
   return (
     <main className="mx-auto max-w-2xl px-4 py-12">
       <nav className="mb-8 text-sm text-muted-foreground">

@@ -1,11 +1,11 @@
 import { Marked, type TokenizerAndRendererExtension } from "marked";
-import { resolveSlug, WIKI_LINK_RE, type WikiIndex } from "./wiki";
+import { existingSlugs, resolveSlug, WIKI_LINK_RE, type WikiIndex } from "./wiki";
 
 const ANCHORED_WIKI_LINK = new RegExp(`^${WIKI_LINK_RE.source}`);
 
 // [[Page Name]] / [[target|label]] → internal links; missing targets render as red links
 export function renderMarkdown(body: string, index: WikiIndex) {
-  const existing = new Set(index.pages.map((p) => p.slug));
+  const existing = existingSlugs(index);
   const wikiLink: TokenizerAndRendererExtension = {
     name: "wikiLink",
     level: "inline",

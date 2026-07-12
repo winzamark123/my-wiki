@@ -9,9 +9,16 @@ import {
 } from "ai";
 import { z } from "zod";
 
+import { gatewayHeaders } from "./ai-gateway";
 import type { RedLinkStreamDataParts } from "./red-link";
-import { resolveSlug, WIKI_LINK_RE } from "./wiki";
-import { getIndex, getPage, writePage } from "./wiki.server";
+import {
+  indexForPrompt,
+  referringPages,
+  resolveSlug,
+  WIKI_LINK_RE_G,
+  type WikiIndex,
+} from "./wiki";
+import { getIndex, getPage, getPageRaw, writePage } from "./wiki.server";
 
 const generatedPageSchema = z.object({
   title: z.string().trim().min(1),
@@ -67,7 +74,7 @@ function extractReferringParagraphs({
   aliases: Record<string, string>;
 }) {
   return body.split(/\n{2,}/).filter((paragraph) => {
-    for (const match of paragraph.matchAll(new RegExp(WIKI_LINK_RE.source, "g"))) {
+    for (const match of paragraph.matchAll(WIKI_LINK_RE_G)) {
       const target = match[1];
       if (target && resolveSlug(target, aliases) === slug) return true;
     }
@@ -75,32 +82,33 @@ function extractReferringParagraphs({
   });
 }
 
-async function buildGenerationPrompt({ bucket, slug }: { bucket: R2Bucket; slug: string }) {
-  const index = await getIndex(bucket);
-  const referringEntries = index.pages.filter((page) => page.links.includes(slug));
+async function buildGenerationPrompt({
+  bucket,
+  slug,
+  index,
+}: {
+  bucket: R2Bucket;
+  slug: string;
+  index: WikiIndex;
+}) {
+  const referringEntries = referringPages(index, slug);
   if (referringEntries.length === 0) return null;
 
-  const referringPages = await Promise.all(
+  const referringSources = await Promise.all(
     referringEntries.map(async (entry) => ({
       entry,
       page: await getPage(bucket, entry.slug),
     })),
   );
-  const referringContext = referringPages.flatMap(({ entry, page }) => {
+  const referringContext = referringSources.flatMap(({ entry, page }) => {
     if (!page) return [];
     return extractReferringParagraphs({ body: page.body, slug, aliases: index.aliases }).map(
       (paragraph) => `From ${entry.title} (${entry.slug}):\n${paragraph}`,
     );
   });
-  const pageIndex = index.pages.map(({ slug: pageSlug, title, summary }) => ({
-    slug: pageSlug,
-    title,
-    summary,
-  }));
-
   return [
     `Create the missing wiki page at slug "${slug}".`,
-    `Existing wiki index (use it to avoid duplicate concepts):\n${JSON.stringify(pageIndex)}`,
+    `Existing wiki index (use it to avoid duplicate concepts):\n${JSON.stringify(indexForPrompt(index))}`,
     referringContext.length > 0
       ? `Paragraphs that link to this missing page:\n\n${referringContext.join("\n\n")}`
       : `Pages that link to this target: ${referringEntries.map((entry) => entry.title).join(", ")}.`,
@@ -111,11 +119,7 @@ function createGatewayModel(env: Env) {
   const openai = createOpenAI({
     apiKey: "gateway-byok",
     baseURL: env.OPENAI_BASE_URL,
-    headers: {
-      "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
-      "cf-aig-skip-cache": "true",
-      "cf-aig-collect-log-payload": "false",
-    },
+    headers: gatewayHeaders(env),
     fetch: (input, init) => {
       const headers = new Headers(init?.headers);
       headers.delete("Authorization");
@@ -147,10 +151,13 @@ export async function createRedLinkGenerationResponse({
   request: Request;
   slug: string;
 }) {
-  const existing = await env.WIKI.get(`wiki/${slug}.md`);
-  if (existing) return replayPage(await existing.text());
+  const [existing, index] = await Promise.all([
+    getPageRaw(env.WIKI, slug),
+    getIndex(env.WIKI),
+  ]);
+  if (existing !== null) return replayPage(existing);
 
-  const prompt = await buildGenerationPrompt({ bucket: env.WIKI, slug });
+  const prompt = await buildGenerationPrompt({ bucket: env.WIKI, slug, index });
   if (!prompt) return new Response("Target is not a red link", { status: 409 });
 
   const stream = createUIMessageStream<RedLinkUIMessage>({
@@ -178,16 +185,15 @@ export async function createRedLinkGenerationResponse({
       let lastMarkdown: string | null = null;
       let lastWriteAt = 0;
       for await (const partial of result.partialOutputStream) {
-        const title = z.string().min(1).safeParse(partial.title);
-        const body = z.string().min(1).safeParse(partial.body);
-        if (!title.success || !body.success) continue;
-        const aliases = z.array(z.string()).safeParse(partial.aliases);
+        // throttle before building: most per-token snapshots are discarded anyway
+        if (Date.now() - lastWriteAt < 250) continue;
+        if (!partial.title || !partial.body) continue;
         const markdown = buildPageMarkdown({
-          title: title.data,
-          aliases: aliases.success ? aliases.data : [],
-          body: body.data,
+          title: partial.title,
+          aliases: partial.aliases?.filter((a) => typeof a === "string") ?? [],
+          body: partial.body,
         });
-        if (markdown === lastMarkdown || Date.now() - lastWriteAt < 250) continue;
+        if (markdown === lastMarkdown) continue;
 
         lastMarkdown = markdown;
         lastWriteAt = Date.now();

@@ -14,8 +14,24 @@ export const wikiIndexSchema = z.object({
 
 export type WikiIndex = z.infer<typeof wikiIndexSchema>;
 
-// single definition of the [[target|label]] grammar; anchor or add flags per call site
+// the index projection LLM prompts see (drops link edges)
+export function indexForPrompt(index: WikiIndex) {
+  return index.pages.map(({ slug, title, summary }) => ({ slug, title, summary }));
+}
+
+export function existingSlugs(index: WikiIndex) {
+  return new Set(index.pages.map((page) => page.slug));
+}
+
+// defines "is a red link": some existing page must link to the missing slug
+export function referringPages(index: WikiIndex, slug: string) {
+  return index.pages.filter((page) => page.links.includes(slug));
+}
+
+// single definition of the [[target|label]] grammar; anchor per call site (see markdown.server)
 export const WIKI_LINK_RE = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/;
+// shared global variant — safe because matchAll clones and replace resets lastIndex
+export const WIKI_LINK_RE_G = new RegExp(WIKI_LINK_RE.source, "g");
 
 export function slugify(name: string) {
   return name
@@ -54,7 +70,7 @@ export function prepareStreamingMarkdown({
   index: WikiIndex;
 }) {
   const completeLinks = body.replace(
-    new RegExp(WIKI_LINK_RE.source, "g"),
+    WIKI_LINK_RE_G,
     (_, target: string, label: string | undefined) => {
       const slug = resolveSlug(target, index.aliases);
       return `[${escapeMarkdownLabel(label ?? target)}](/wiki/${slug})`;

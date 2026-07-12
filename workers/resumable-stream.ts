@@ -2,7 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 
 type StreamStatus = "idle" | "streaming";
 
-const INTERNAL_HEADER = "X-Resumable-Internal";
+// marks the DO's loopback fetch so the route generates instead of proxying back in
+export const INTERNAL_HEADER = "X-Resumable-Internal";
 const STREAM_TTL_MS = 2 * 60 * 1000;
 
 function padSequence(value: number) {
@@ -99,12 +100,12 @@ export class ResumableStreamDO extends DurableObject<Env> {
     const writer = writable.getWriter();
     let replayEndSequence = 0;
     await this.ctx.blockConcurrencyWhile(async () => {
+      // list() returns keys in ascending order and chunk keys are zero-padded
       const storedChunks = await this.ctx.storage.list<Uint8Array>({ prefix: "chunk:" });
-      const sortedChunks = [...storedChunks].sort(([a], [b]) => a.localeCompare(b));
-      for (const [, value] of sortedChunks) {
+      for (const value of storedChunks.values()) {
         writer.write(value).catch(() => undefined);
       }
-      replayEndSequence = sortedChunks.length;
+      replayEndSequence = storedChunks.size;
     });
 
     if (!this.fetching) {

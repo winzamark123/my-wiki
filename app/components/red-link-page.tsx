@@ -10,7 +10,12 @@ import {
   wikiPageSnapshotSchema,
   type RedLinkStreamDataParts,
 } from "~/lib/red-link";
-import { parseFrontmatter, prepareStreamingMarkdown, type WikiIndex } from "~/lib/wiki";
+import {
+  existingSlugs,
+  parseFrontmatter,
+  prepareStreamingMarkdown,
+  type WikiIndex,
+} from "~/lib/wiki";
 
 function titleFromSlug(slug: string) {
   return slug
@@ -74,10 +79,7 @@ export function RedLinkPage({ slug, index }: { slug: string; index: WikiIndex })
         : "",
     [index, parsedDraft],
   );
-  const existingSlugs = useMemo(
-    () => new Set(index.pages.map((page) => page.slug)),
-    [index.pages],
-  );
+  const existing = useMemo(() => existingSlugs(index), [index]);
   const isStreaming = status === "submitted" || status === "streaming";
   const title = parsedDraft?.attrs.title ?? titleFromSlug(slug);
 
@@ -101,7 +103,7 @@ export function RedLinkPage({ slug, index }: { slug: string; index: WikiIndex })
               const wikiSlug = href?.startsWith("/wiki/")
                 ? href.slice("/wiki/".length)
                 : null;
-              const isRedLink = Boolean(wikiSlug && !existingSlugs.has(wikiSlug));
+              const isRedLink = Boolean(wikiSlug && !existing.has(wikiSlug));
               return (
                 <a
                   {...props}
