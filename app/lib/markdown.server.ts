@@ -1,5 +1,5 @@
 import { Marked, type TokenizerAndRendererExtension } from "marked";
-import { resolveSlug, WIKI_LINK_RE, type WikiIndex } from "./wiki.server";
+import { resolveSlug, WIKI_LINK_RE, type WikiIndex } from "./wiki";
 
 const ANCHORED_WIKI_LINK = new RegExp(`^${WIKI_LINK_RE.source}`);
 

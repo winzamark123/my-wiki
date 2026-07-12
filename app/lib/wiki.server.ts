@@ -1,46 +1,14 @@
 // content store access. R2 layout and the write seam — see ARCHITECTURE.md
 
-export interface IndexEntry {
-  slug: string;
-  title: string;
-  summary: string;
-  links: string[];
-}
-
-export interface WikiIndex {
-  pages: IndexEntry[];
-  aliases: Record<string, string>;
-}
-
-// single definition of the [[target|label]] grammar; anchor or add flags per call site
-export const WIKI_LINK_RE = /\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/;
+import {
+  parseFrontmatter,
+  slugify,
+  wikiIndexSchema,
+  WIKI_LINK_RE,
+  type WikiIndex,
+} from "./wiki";
 
 export const CACHE_HEADERS = { "Cache-Control": "public, max-age=0, s-maxage=60" };
-
-export function slugify(name: string) {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-// the one place link targets resolve to canonical slugs (alias dedup)
-export function resolveSlug(target: string, aliases: Record<string, string>) {
-  const slug = slugify(target);
-  return aliases[slug] ?? slug;
-}
-
-export function parseFrontmatter(raw: string) {
-  const match = raw.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) return { attrs: {} as Record<string, string>, body: raw };
-  const attrs: Record<string, string> = {};
-  for (const line of match[1].split("\n")) {
-    const sep = line.indexOf(":");
-    if (sep > 0) attrs[line.slice(0, sep).trim()] = line.slice(sep + 1).trim();
-  }
-  return { attrs, body: raw.slice(match[0].length) };
-}
 
 function extractWikiLinks(body: string) {
   const links = new Set<string>();
@@ -59,8 +27,8 @@ export async function getPage(bucket: R2Bucket, slug: string) {
 
 export async function getIndex(bucket: R2Bucket) {
   const obj = await bucket.get("index.json");
-  if (!obj) return { pages: [], aliases: {} } as WikiIndex;
-  return (await obj.json()) as WikiIndex;
+  if (!obj) return { pages: [], aliases: {} };
+  return wikiIndexSchema.parse(await obj.json());
 }
 
 function summarize(body: string) {

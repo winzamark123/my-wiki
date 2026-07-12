@@ -6,7 +6,7 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 
 - **App**: React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`
 - **Content store**: R2 (markdown, images, index/graph JSON) — the live copy
-- **Jobs**: Cloudflare Workflows (synthesis, red-link generation, Matter polling, lint, digest)
+- **Jobs**: Cloudflare Workflows (multi-page synthesis, Matter polling, lint, digest); a Durable Object carries resumable single-page red-link streams
 - **LLM**: GPT-5.6 Sol with high reasoning via OpenAI Responses and Cloudflare AI Gateway BYOK (direct OpenAI billing, metadata-only gateway logs)
 - **Read caching**: Workers Cache (`"cache": {"enabled": true}`) driven by `Cache-Control` headers
 - **Auth**: Cloudflare Access on write endpoints and private paths; wiki pages publicly readable
@@ -69,10 +69,12 @@ Every background job is a Workflow. Rationale:
 
 Workflows in v1:
 
-- `SynthesisWorkflow` — input-box submissions and red-link generation (same machinery, different trigger)
+- `SynthesisWorkflow` — input-box submissions that may read and write several pages
 - `MatterPollWorkflow` — cron; polls Matter highlights feed, enqueues ingests
 - `LintWorkflow` — cron; mechanical self-heals + judgment calls surfaced to digest
 - `DigestWorkflow` — cron; renders digest from log/history, sends via Email Service
+
+Red-link generation is intentionally not a Workflow: navigating to one missing target opens an AI SDK UI-message stream, and a Durable Object keyed by slug deduplicates concurrent requests and replays in-flight chunks after refresh. The final validated markdown is written through `writePage`; Streamdown renders partial snapshots in the browser.
 
 **Toast**: v1 polls the workflow instance `status()` via a lightweight endpoint. Upgrade path: one Agents SDK Durable Object holding a WebSocket, using its `onWorkflowProgress` → `broadcast()` hook. Add only if polling latency annoys.
 
@@ -111,7 +113,7 @@ Two unrelated git repos:
 ## Milestones
 
 1. **Spine**: React Router app on Workers + R2 read path (markdown → SSR HTML → edge cache) + input box → `SynthesisWorkflow` end-to-end (one page written, toast fires). Write seam with history/ copies. Access on writes.
-2. **Graph & links**: index.json regeneration, graph view, red links, dedup/alias resolution, eager one-layer generation.
+2. **Graph & links**: index.json regeneration, graph view, red links, dedup/alias resolution, lazy streamed generation on target navigation.
 3. **Ingestion**: Matter polling workflow, source pages, highlight-quote popup.
 4. **Upkeep**: lint workflow, digest email, sitemap/meta polish.
 5. **Deferred**: GitHub mirror, WebSocket toast, sandbox maintenance path, per-page visibility flags.
@@ -119,5 +121,5 @@ Two unrelated git repos:
 ## Open design problems (not blockers)
 
 - **Dedup/alias resolution** (DESIGN.md calls it the hard problem): lean — aliases in page frontmatter, flattened alias→slug map in index.json, every link the synthesizer writes resolves against it via a cheap-model pass. Needs its own design pass before milestone 2.
-- **Eager red-link generation cost dial**: consider "eager only for pages opened from the graph" if cost bites; provider-side project limits are the billing backstop.
+- **Red-link generation cost dial**: generation is lazy by default; provider-side project limits remain the billing backstop.
 - DESIGN.md's open trio: digest cadence, Matter auto-ingest vs confirm, highlight popup actions.

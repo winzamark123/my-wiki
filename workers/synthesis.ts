@@ -7,7 +7,8 @@ import type {
 } from "openai/resources/responses/responses";
 import { z } from "zod";
 
-import { appendLog, getIndex, getPage, slugify, writePage } from "../app/lib/wiki.server";
+import { slugify } from "../app/lib/wiki";
+import { appendLog, getIndex, getPage, writePage } from "../app/lib/wiki.server";
 
 export interface SynthesisParams {
   text: string;

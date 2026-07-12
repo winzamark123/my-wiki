@@ -5,5 +5,6 @@ export default [
   route("wiki/:slug", "routes/wiki-page.tsx"),
   route("api/input", "routes/api.input.ts"),
   route("api/jobs/:id", "routes/api.jobs.ts"),
+  route("api/wiki/:slug/generate", "routes/api.red-link.ts"),
   route("api/reindex", "routes/api.reindex.ts"),
 ] satisfies RouteConfig;

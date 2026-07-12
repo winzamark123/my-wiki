@@ -2,15 +2,17 @@ import { env } from "cloudflare:workers";
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/wiki-page";
-import { CACHE_HEADERS, getIndex, getPage } from "~/lib/wiki.server";
+import { RedLinkPage } from "~/components/red-link-page";
 import { renderMarkdown } from "~/lib/markdown.server";
+import { CACHE_HEADERS, getIndex, getPage } from "~/lib/wiki.server";
 
 export function meta({ loaderData }: Route.MetaArgs) {
   return [{ title: loaderData?.title ? `${loaderData.title} · Wiki` : "Wiki" }];
 }
 
-export function headers() {
-  return CACHE_HEADERS;
+export function headers({ loaderHeaders }: Route.HeadersArgs) {
+  const cacheControl = loaderHeaders.get("Cache-Control");
+  return cacheControl ? { "Cache-Control": cacheControl } : CACHE_HEADERS;
 }
 
 export async function loader({ params }: Route.LoaderArgs) {
@@ -19,10 +21,20 @@ export async function loader({ params }: Route.LoaderArgs) {
     getIndex(env.WIKI),
   ]);
   if (!page) {
-    // red-link target: a page that hasn't been written yet is an empty page, not an error
-    return data({ slug: params.slug, title: null, html: null }, { status: 404 });
+    // missing targets generate only after this page hydrates, never from a crawler GET
+    const isRedLink = index.pages.some((entry) => entry.links.includes(params.slug));
+    return data(
+      { slug: params.slug, title: null, html: null, index, isRedLink },
+      { status: 404, headers: { "Cache-Control": "no-store" } },
+    );
   }
-  return { slug: page.slug, title: page.title, html: renderMarkdown(page.body, index) };
+  return {
+    slug: page.slug,
+    title: page.title,
+    html: renderMarkdown(page.body, index),
+    index: null,
+    isRedLink: false,
+  };
 }
 
 export default function WikiPage({ loaderData }: Route.ComponentProps) {
@@ -34,7 +46,9 @@ export default function WikiPage({ loaderData }: Route.ComponentProps) {
           ← index
         </Link>
       </nav>
-      {html === null ? (
+      {html === null && loaderData.isRedLink ? (
+        <RedLinkPage key={slug} slug={slug} index={loaderData.index} />
+      ) : html === null ? (
         <>
           <h1 className="text-2xl font-semibold text-destructive/80">{slug}</h1>
           <p className="mt-6 text-muted-foreground">

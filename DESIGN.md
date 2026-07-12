@@ -30,7 +30,7 @@ Everything is markdown. **R2 holds the live copy** (what the app serves); **git 
 
 No sandbox, no vector DB. The agent is a tool-use loop inside the Worker with tools backed by R2: `read_index()`, `read_page(slug)`, `write_page(slug, content)`. Traversal mirrors human navigation: read `index.md` (the whole map fits in context at personal-wiki scale), open relevant pages, follow their internal links outward. The frontloaded `[[wiki-links]]` are the retrieval graph for the LLM, not just navigation for the reader.
 
-Synthesis jobs (multi-step: read pages, web search, write several files) run as queue consumers / Workflows — the input-box request enqueues and returns instantly; the job fires the toast when done. Same machinery for red-link generation and lint. For heavy one-off maintenance, clone the git mirror and run an agent against the filesystem locally.
+Synthesis jobs that can touch several pages run as Workflows — the input-box request enqueues and returns instantly; the job fires the toast when done. Red-link pages use a narrower live stream because the user is waiting on one specific page: generation streams into the page, survives refresh through a Durable Object, then writes through the same R2 seam. Lint remains a Workflow. For heavy one-off maintenance, clone the git mirror and run an agent against the filesystem locally.
 
 ## Surfaces
 
@@ -69,7 +69,7 @@ Highlighting text (on wiki *or* source pages) shows a small popup above the sele
 
 Links are internal-only and written liberally — including to pages that don't exist yet. A red link is not an error; the set of red links is the reading queue.
 
-- **Eager, one layer deep**: opening a page queues background generation of its red links, so they're ready by the time I click. Newly generated pages' own red links stay red until *that* page is opened. The frontier expands one step ahead of reading — infinite generation is structurally impossible.
+- **Lazy and attention-gated**: opening a missing red-link target starts generation and streams the article into that page. Its own red links stay red until each target is opened, so growth follows reading and infinite generation is structurally impossible.
 - **Cap ~10–15 links per page** — bounds cost and forces linking what matters.
 - **Dedup is the hard problem**: every link resolves against the index with aliases ("computer use" = "CUA" = "computer-use agents") before a new red link is created. Sloppy dedup fragments the graph into near-duplicates.
 - **Context-rich births**: a red-link page is generated from the paragraph(s) that reference it + related wiki pages + web search — never from the title alone. Links accumulated from multiple pages give the generation multiple contexts.

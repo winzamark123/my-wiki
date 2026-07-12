@@ -8,6 +8,7 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
+import "streamdown/styles.css";
 import "./app.css";
 import { InputBox } from "~/components/input-box";
 import { Toaster } from "~/components/ui/sonner";

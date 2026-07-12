@@ -15,13 +15,27 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
-	"compatibility_flags": ["nodejs_compat"],
+	"compatibility_flags": ["nodejs_compat", "enable_request_signal"],
 	// edge-caches responses per Cache-Control headers; hits skip the Worker
 	"cache": { "enabled": true },
 	"r2_buckets": [
 		{
 			"binding": "WIKI",
 			"bucket_name": "my-wiki"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "RED_LINK_STREAM",
+				"class_name": "ResumableStreamDO"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ResumableStreamDO"]
 		}
 	],
 	"workflows": [
