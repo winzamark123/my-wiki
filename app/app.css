@@ -1,7 +1,8 @@
 @import "tailwindcss" source(".");
 @plugin "@tailwindcss/typography";
 
-@custom-variant dark (&:is(.dark *));
+/* html.dark is set before paint by the script in root.tsx (stored choice, else the system setting) */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif,
@@ -9,6 +10,7 @@
 }
 
 :root {
+  color-scheme: light;
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -32,6 +34,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -86,14 +89,4 @@
   body {
     @apply bg-background text-foreground;
   }
-  @media (prefers-color-scheme: dark) {
-    html {
-      color-scheme: dark;
-    }
-  }
-}
-
-/* internal wiki links: existing pages vs red links (not yet generated) */
-.prose a[data-wiki-link] {
-  @apply no-underline border-b border-dashed border-blue-500/50 font-normal text-blue-600 dark:border-blue-400/50 dark:text-blue-400;
 }

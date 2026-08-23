@@ -4,66 +4,48 @@ import {
   forceLink,
   forceManyBody,
   forceSimulation,
+  forceX,
+  forceY,
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3-force";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 
-import type { IndexSource, WikiIndex } from "~/lib/wiki";
+import type { IndexSource, Link as WikiLink } from "~/lib/wiki";
 
 // node vocabulary: DESIGN.md → Surfaces → Graph
 type GraphNode = SimulationNodeDatum & {
   id: string;
-  href: string;
   title: string;
   r: number;
-} & ({ kind: "page" } | { kind: "source"; state: IndexSource["state"]; progress: number; favorite: boolean });
+  state: IndexSource["state"];
+  progress: number;
+};
 
-type GraphEdge = SimulationLinkDatum<GraphNode> & { dotted: boolean };
+type GraphEdge = SimulationLinkDatum<GraphNode> & { label: string };
 
 const WIDTH = 1000;
 const HEIGHT = 700;
+const PAD = 12;
 
 function sourceRadius(words: number | undefined) {
   return Math.min(16, Math.max(4, 3 + Math.sqrt(words ?? 0) / 6));
 }
 
-export function buildGraph(index: Pick<WikiIndex, "pages" | "sources">) {
-  const nodes: GraphNode[] = [
-    ...index.pages.map((page) => ({
-      kind: "page" as const,
-      id: `wiki:${page.slug}`,
-      href: `/wiki/${page.slug}`,
-      title: page.title,
-      r: 7 + Math.min(6, page.cites.length),
-    })),
-    ...index.sources.map((source) => ({
-      kind: "source" as const,
-      id: source.matter_id,
-      href: `/source/${source.matter_id}`,
-      title: source.title,
-      r: sourceRadius(source.word_count),
-      state: source.state,
-      progress: source.progress,
-      favorite: source.favorite,
-    })),
-  ];
+export function buildGraph({ sources, links }: { sources: IndexSource[]; links: WikiLink[] }) {
+  const nodes: GraphNode[] = sources.map((source) => ({
+    id: source.matter_id,
+    title: source.title,
+    r: sourceRadius(source.word_count),
+    state: source.state,
+    progress: source.progress,
+  }));
   const ids = new Set(nodes.map((n) => n.id));
-  const edges: GraphEdge[] = [];
-  for (const page of index.pages) {
-    for (const slug of page.links) {
-      if (ids.has(`wiki:${slug}`)) edges.push({ source: `wiki:${page.slug}`, target: `wiki:${slug}`, dotted: false });
-    }
-    for (const id of page.cites) {
-      if (ids.has(id)) edges.push({ source: `wiki:${page.slug}`, target: id, dotted: false });
-    }
-  }
-  for (const source of index.sources) {
-    for (const slug of source.near) {
-      if (ids.has(`wiki:${slug}`)) edges.push({ source: source.matter_id, target: `wiki:${slug}`, dotted: true });
-    }
-  }
+  // links are filtered to the visible nodes; the index already holds one entry per pair
+  const edges: GraphEdge[] = links
+    .filter(({ a, b }) => ids.has(a) && ids.has(b))
+    .map(({ a, b, label }) => ({ source: a, target: b, label }));
   return { nodes, edges };
 }
 
@@ -74,8 +56,15 @@ function layout({ nodes, edges }: ReturnType<typeof buildGraph>) {
     .force("link", forceLink<GraphNode, GraphEdge>(edges).id((n) => n.id).distance(50))
     .force("collide", forceCollide<GraphNode>((n) => n.r + 3))
     .force("center", forceCenter(WIDTH / 2, HEIGHT / 2))
+    // weak pull inward so a sparse library stays a cloud instead of drifting off-canvas
+    .force("x", forceX(WIDTH / 2).strength(0.025))
+    .force("y", forceY(HEIGHT / 2).strength(0.04))
     .stop();
   simulation.tick(300);
+  for (const node of nodes) {
+    node.x = Math.min(WIDTH - PAD - node.r, Math.max(PAD + node.r, node.x ?? 0));
+    node.y = Math.min(HEIGHT - PAD - node.r, Math.max(PAD + node.r, node.y ?? 0));
+  }
   return { nodes, edges };
 }
 
@@ -96,72 +85,125 @@ function ProgressRing({ r, progress }: { r: number; progress: number }) {
   );
 }
 
-function NodeShape({ node }: { node: GraphNode }) {
-  if (node.kind === "page") {
-    const s = node.r * 1.4;
-    return <rect x={-s / 2} y={-s / 2} width={s} height={s} transform="rotate(45)" className="fill-sky-700 dark:fill-sky-400" />;
-  }
+// centered at the svg origin; callers position with a transform or a centered viewBox
+export function SourceGlyph({ r, state, progress }: { r: number; state: IndexSource["state"]; progress: number }) {
   return (
     <>
-      {node.state === "queued" && (
-        <circle r={node.r} fill="none" className="stroke-foreground" strokeWidth={1.5} strokeDasharray="3 3" />
+      {/* hollow states are clickable across the whole disc, not only on the rim */}
+      <circle r={r} fill="transparent" />
+      {state === "queued" && (
+        <circle r={r} fill="none" className="stroke-foreground" strokeWidth={1.5} strokeDasharray="3 3" />
       )}
-      {node.state === "reading" && <ProgressRing r={node.r} progress={node.progress} />}
-      {node.state === "archived" && <circle r={node.r} className="fill-foreground" />}
-      {node.favorite && (
-        <circle cx={node.r * 0.75} cy={-node.r * 0.75} r={3.5} className="fill-amber-500 stroke-background" strokeWidth={1.5} />
-      )}
+      {state === "reading" && <ProgressRing r={r} progress={progress} />}
+      {state === "archived" && <circle r={r} className="fill-foreground" />}
     </>
   );
 }
 
-export function Graph({ index }: { index: Pick<WikiIndex, "pages" | "sources"> }) {
-  const graph = useMemo(() => buildGraph(index), [index]);
+const LEGEND = [
+  { label: "queued", glyph: <SourceGlyph r={6} state="queued" progress={0} /> },
+  { label: "reading", glyph: <SourceGlyph r={6} state="reading" progress={0.4} /> },
+  { label: "archived", glyph: <SourceGlyph r={6} state="archived" progress={0} /> },
+  {
+    label: "related (hover for why)",
+    glyph: <line x1={-9} x2={9} className="stroke-muted-foreground" strokeWidth={1.5} strokeDasharray="2 3" />,
+  },
+];
+
+function endpoints(edge: GraphEdge) {
+  // d3 replaces endpoint ids with node objects once the link force runs
+  return typeof edge.source === "object" && typeof edge.target === "object"
+    ? { a: edge.source, b: edge.target }
+    : null;
+}
+
+export function Graph({ sources, links }: { sources: IndexSource[]; links: WikiLink[] }) {
+  const graph = useMemo(() => buildGraph({ sources, links }), [sources, links]);
   // layout runs on the client only; the server renders an empty canvas that hydrates into place
   const [positioned, setPositioned] = useState<ReturnType<typeof layout> | null>(null);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
+  const [hoveredEdge, setHoveredEdge] = useState<GraphEdge | null>(null);
   useEffect(() => setPositioned(layout(graph)), [graph]);
 
+  const labelOnLeft = Boolean(hovered && (hovered.x ?? 0) > WIDTH * 0.7);
+  const edgeLabel = hoveredEdge && endpoints(hoveredEdge);
+
   return (
-    <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="aspect-[10/7] w-full rounded border border-border bg-card">
-      {positioned?.edges.map((edge, i) => {
-        // d3 replaces endpoint ids with node objects once the link force runs
-        if (typeof edge.source !== "object" || typeof edge.target !== "object") return null;
-        return (
-          <line
-            key={i}
-            x1={edge.source.x}
-            y1={edge.source.y}
-            x2={edge.target.x}
-            y2={edge.target.y}
-            className="stroke-muted-foreground/50"
-            strokeWidth={1}
-            strokeDasharray={edge.dotted ? "2 4" : undefined}
-          />
-        );
-      })}
-      {positioned?.nodes.map((node) => (
-        <Link key={node.id} to={node.href}>
-          <g
-            transform={`translate(${node.x},${node.y})`}
-            onMouseEnter={() => setHovered(node)}
-            onMouseLeave={() => setHovered(null)}
+    <div>
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="aspect-[10/7] w-full rounded border border-border bg-card">
+        {positioned?.edges.map((edge, i) => {
+          const ends = endpoints(edge);
+          if (!ends) return null;
+          const active = edge === hoveredEdge || (hovered !== null && (ends.a === hovered || ends.b === hovered));
+          return (
+            // a wide transparent stroke makes the thin line hoverable
+            <g key={i} onMouseEnter={() => setHoveredEdge(edge)} onMouseLeave={() => setHoveredEdge(null)}>
+              <line x1={ends.a.x} y1={ends.a.y} x2={ends.b.x} y2={ends.b.y} stroke="transparent" strokeWidth={12} />
+              <line
+                x1={ends.a.x}
+                y1={ends.a.y}
+                x2={ends.b.x}
+                y2={ends.b.y}
+                className={active ? "stroke-foreground" : "stroke-muted-foreground/50"}
+                strokeWidth={active ? 1.5 : 1}
+                strokeDasharray="2 4"
+              />
+            </g>
+          );
+        })}
+        {positioned?.nodes.map((node) => (
+          <Link key={node.id} to={`/source/${node.id}`}>
+            <g
+              transform={`translate(${node.x},${node.y})`}
+              className="cursor-pointer"
+              onMouseEnter={() => setHovered(node)}
+              onMouseLeave={() => setHovered(null)}
+            >
+              <title>{node.title}</title>
+              {hovered === node && <circle r={node.r + 5} fill="none" className="stroke-foreground/25" strokeWidth={2} />}
+              <SourceGlyph r={node.r} state={node.state} progress={node.progress} />
+            </g>
+          </Link>
+        ))}
+        {edgeLabel && !hovered && (
+          <text
+            x={((edgeLabel.a.x ?? 0) + (edgeLabel.b.x ?? 0)) / 2}
+            y={((edgeLabel.a.y ?? 0) + (edgeLabel.b.y ?? 0)) / 2 - 6}
+            textAnchor="middle"
+            paintOrder="stroke"
+            strokeWidth={4}
+            strokeLinejoin="round"
+            className="fill-foreground stroke-card text-[13px]"
+            style={{ pointerEvents: "none" }}
           >
-            <title>{node.title}</title>
-            <NodeShape node={node} />
-          </g>
-        </Link>
-      ))}
-      {hovered && (
-        <text
-          x={(hovered.x ?? 0) + hovered.r + 6}
-          y={(hovered.y ?? 0) + 4}
-          className="fill-foreground text-[13px]"
-          style={{ pointerEvents: "none" }}
-        >
-          {hovered.title}
-        </text>
-      )}
-    </svg>
+            {hoveredEdge?.label}
+          </text>
+        )}
+        {hovered && (
+          <text
+            x={(hovered.x ?? 0) + (labelOnLeft ? -1 : 1) * (hovered.r + 10)}
+            y={(hovered.y ?? 0) + 4}
+            textAnchor={labelOnLeft ? "end" : "start"}
+            paintOrder="stroke"
+            strokeWidth={4}
+            strokeLinejoin="round"
+            className="fill-foreground stroke-card text-[13px] font-medium"
+            style={{ pointerEvents: "none" }}
+          >
+            {hovered.title}
+          </text>
+        )}
+      </svg>
+      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {LEGEND.map(({ label, glyph }) => (
+          <li key={label} className="flex items-center gap-1.5">
+            <svg width={20} height={20} viewBox="-10 -10 20 20" aria-hidden>
+              {glyph}
+            </svg>
+            {label}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

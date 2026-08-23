@@ -1,6 +1,5 @@
 import { createRequestHandler } from "react-router";
 
-export { SynthesisWorkflow } from "./synthesis";
 export { MatterSyncWorkflow } from "./matter-sync";
 
 const requestHandler = createRequestHandler(

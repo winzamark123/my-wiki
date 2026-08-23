@@ -3,6 +3,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { createMatterClient, type MatterItem } from "../app/lib/matter.server";
 import { sourceMetaFromItem } from "../app/lib/sources";
 import { getSource, getSyncState, writeSource, writeSyncState } from "../app/lib/sources.server";
+import { linkSources } from "../app/lib/links.server";
 import { appendLog, regenerateIndex } from "../app/lib/wiki.server";
 
 export interface MatterSyncParams {
@@ -14,6 +15,8 @@ export interface MatterSyncParams {
 const BATCH_SIZE = 10;
 // markdown endpoint allows 20/min; space fetches inside a step (wall-clock is free)
 const MARKDOWN_INTERVAL_MS = 3100;
+// sources linked per step: each costs a reranker call and an LLM call
+const LINK_BATCH_SIZE = 5;
 
 export class MatterSyncWorkflow extends WorkflowEntrypoint<Env, MatterSyncParams> {
   async run(event: WorkflowEvent<MatterSyncParams>, step: WorkflowStep) {
@@ -53,17 +56,26 @@ export class MatterSyncWorkflow extends WorkflowEntrypoint<Env, MatterSyncParams
       });
     }
 
-    await step.do("regenerate index", () => regenerateIndex(this.env.WIKI, this.env.AI).then(() => undefined));
+    const pending = await step.do("regenerate index", async () => (await regenerateIndex(this.env.WIKI, this.env.AI)).pending);
+    for (let start = 0; start < pending.length; start += LINK_BATCH_SIZE) {
+      const batch = pending.slice(start, start + LINK_BATCH_SIZE);
+      await step.do(`link items ${start + 1}-${start + batch.length}`, async () => {
+        await linkSources({ bucket: this.env.WIKI, ai: this.env.AI, ids: batch });
+      });
+    }
+    if (pending.length > 0) {
+      await step.do("regenerate index with links", () => regenerateIndex(this.env.WIKI, this.env.AI).then(() => undefined));
+    }
 
     await step.do("advance cursor", async () => {
       const newest = items.map((i) => i.updated_at).sort().at(-1) ?? cursor;
       await writeSyncState(this.env.WIKI, { cursor: newest, lastRun: new Date().toISOString() });
       await appendLog(
         this.env.WIKI,
-        `matter sync: ${items.length} items changed, ${bodiesFetched} bodies fetched${cursor ? ` since ${cursor}` : " (full)"}`,
+        `matter sync: ${items.length} items changed, ${bodiesFetched} bodies fetched, ${pending.length} linked${cursor ? ` since ${cursor}` : " (full)"}`,
       );
     });
 
-    return { items: items.length, bodiesFetched };
+    return { items: items.length, bodiesFetched, linked: pending.length };
   }
 }

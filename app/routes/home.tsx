@@ -3,7 +3,8 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 
 import type { Route } from "./+types/home";
-import { Graph } from "~/components/graph";
+import { Graph, SourceGlyph } from "~/components/graph";
+import { ThemeToggle } from "~/components/theme-toggle";
 import { sourceStates } from "~/lib/sources";
 import type { IndexSource } from "~/lib/wiki";
 import { CACHE_HEADERS, getIndex } from "~/lib/wiki.server";
@@ -17,9 +18,9 @@ export function headers() {
 }
 
 export async function loader() {
-  const { pages, sources } = await getIndex(env.WIKI);
+  const { sources, links } = await getIndex(env.WIKI);
   // the graph doesn't need excerpts; keep the payload small
-  return { pages, sources: sources.map(({ excerpt: _excerpt, ...rest }) => rest) };
+  return { sources: sources.map(({ excerpt: _excerpt, ...rest }) => rest), links };
 }
 
 type State = IndexSource["state"];
@@ -27,8 +28,14 @@ type State = IndexSource["state"];
 const chipClass = (active: boolean) =>
   `rounded-full border px-3 py-1 text-sm ${active ? "border-foreground bg-foreground text-background" : "border-border text-muted-foreground hover:border-foreground"}`;
 
+function sourceFacts(source: Pick<IndexSource, "site" | "state" | "progress">) {
+  return [source.site, source.state === "reading" ? `${Math.round(source.progress * 100)}%` : null]
+    .filter((f): f is string => Boolean(f))
+    .join(" · ");
+}
+
 export default function Home({ loaderData }: Route.ComponentProps) {
-  const { pages, sources } = loaderData;
+  const { sources, links } = loaderData;
   const [view, setView] = useState<"graph" | "list">("graph");
   const [states, setStates] = useState<Set<State>>(new Set(sourceStates));
   const [favoritesOnly, setFavoritesOnly] = useState(false);
@@ -54,7 +61,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
       ),
     [sources, states, favoritesOnly, site, minWords],
   );
-  const filtered = useMemo(() => ({ pages, sources: visible }), [pages, visible]);
 
   function toggleState(state: State) {
     setStates((prev) => {
@@ -75,6 +81,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
               {v}
             </button>
           ))}
+          <ThemeToggle className={`${chipClass(false)} px-2`} />
         </div>
       </header>
       <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
@@ -109,45 +116,41 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             </option>
           ))}
         </select>
-        <span className="text-muted-foreground">
-          {visible.length} sources · {pages.length} topic pages
+        <span className="ml-auto text-muted-foreground">
+          {visible.length} of {sources.length} sources
         </span>
       </div>
 
       {view === "graph" ? (
-        <Graph index={filtered} />
+        <Graph sources={visible} links={links} />
       ) : (
-        <div className="grid gap-8 md:grid-cols-2">
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Topic pages</h2>
-            {pages.length === 0 && <p className="text-muted-foreground">No topic pages yet.</p>}
-            <ul className="space-y-3">
-              {pages.map((page) => (
-                <li key={page.slug}>
-                  <Link to={`/wiki/${page.slug}`} className="font-medium hover:underline">
-                    {page.title}
-                  </Link>
-                  {page.summary && <p className="text-sm text-muted-foreground">{page.summary}</p>}
-                </li>
-              ))}
-            </ul>
-          </section>
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Sources</h2>
-            <ul className="space-y-2">
-              {visible.map((s) => (
-                <li key={s.matter_id} className="flex items-baseline gap-2">
-                  <span className="w-16 shrink-0 text-xs text-muted-foreground">
-                    {s.state === "reading" ? `${Math.round(s.progress * 100)}%` : s.state}
-                  </span>
-                  <Link to={`/source/${s.matter_id}`} className="hover:underline">
-                    {s.title}
-                  </Link>
-                  {s.site && <span className="text-xs text-muted-foreground">{s.site}</span>}
-                </li>
-              ))}
-            </ul>
-          </section>
+        <div className="grid gap-8 md:grid-cols-3">
+          {sourceStates.map((state) => {
+            const items = visible.filter((s) => s.state === state);
+            if (items.length === 0) return null;
+            return (
+              <section key={state}>
+                <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  {state} · {items.length}
+                </h2>
+                <ul className="space-y-2">
+                  {items.map((s) => (
+                    <li key={s.matter_id} className="flex gap-2">
+                      <svg width={16} height={16} viewBox="-8 -8 16 16" className="mt-1 shrink-0" aria-hidden>
+                        <SourceGlyph r={5} state={s.state} progress={s.progress} />
+                      </svg>
+                      <p>
+                        <Link to={`/source/${s.matter_id}`} className="hover:underline">
+                          {s.title}
+                        </Link>{" "}
+                        <span className="text-xs text-muted-foreground">{sourceFacts(s)}</span>
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
         </div>
       )}
     </main>

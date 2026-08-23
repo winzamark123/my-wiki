@@ -1,5 +1,6 @@
 import {
   isRouteErrorResponse,
+  Link,
   Links,
   Meta,
   Outlet,
@@ -25,9 +26,15 @@ export const links: Route.LinksFunction = () => [
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
+        {/* runs before paint so the stored theme never flashes */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var t=localStorage.getItem("theme");document.documentElement.classList.toggle("dark",t?t==="dark":matchMedia("(prefers-color-scheme: dark)").matches)}catch(e){}`,
+          }}
+        />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
@@ -62,11 +69,16 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   }
 
   return (
-    <main className="pt-16 p-4 container mx-auto">
-      <h1>{message}</h1>
-      <p>{details}</p>
+    <main className="mx-auto max-w-2xl px-4 py-12">
+      <nav className="mb-8 text-sm text-muted-foreground">
+        <Link to="/" className="hover:underline">
+          ← index
+        </Link>
+      </nav>
+      <h1 className="text-2xl font-semibold">{message}</h1>
+      <p className="mt-6 text-muted-foreground">{details}</p>
       {stack && (
-        <pre className="w-full p-4 overflow-x-auto">
+        <pre className="mt-6 w-full overflow-x-auto rounded border border-border bg-card p-4 text-xs">
           <code>{stack}</code>
         </pre>
       )}

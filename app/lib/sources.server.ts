@@ -2,8 +2,7 @@
 import { z } from "zod";
 
 import { readObjects } from "./r2.server";
-import { serializeSource, sourceFrontmatterSchema, type SourceMeta } from "./sources";
-import { parseFrontmatter } from "./wiki";
+import { embeddingText, parseFrontmatter, serializeSource, sourceFrontmatterSchema, type SourceMeta } from "./sources";
 
 // frontmatter fits comfortably in this many bytes (title, url, 500-char excerpt, timestamps)
 const FRONTMATTER_BYTES = 4096;
@@ -24,6 +23,17 @@ export async function getSource(bucket: R2Bucket, id: string) {
   return obj ? parseSource(await obj.text()) : null;
 }
 
+// embedding input for every source; reads every body, fine at personal-library scale
+export async function listEmbeddingTexts(bucket: R2Bucket) {
+  const objects = await readObjects({ bucket, prefix: "sources/" });
+  const texts: Record<string, string> = {};
+  for (const { text } of objects) {
+    const { meta, body } = parseSource(text);
+    texts[meta.matter_id] = embeddingText({ title: meta.title, body });
+  }
+  return texts;
+}
+
 // metadata for every source, reading only each object's head; bodies stay in R2
 export async function listSourceMeta(bucket: R2Bucket) {
   const heads = await readObjects({ bucket, prefix: "sources/", headBytes: FRONTMATTER_BYTES });
@@ -36,7 +46,7 @@ export async function listSourceMeta(bucket: R2Bucket) {
   );
 }
 
-// sources don't go through the wiki write seam: no history copies, and the index is regenerated once per sync
+// the index is regenerated once per sync, not per write
 export async function writeSource({
   bucket,
   meta,

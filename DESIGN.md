@@ -1,15 +1,15 @@
 # Reading Wiki — Design Spec
 
-A graph of everything I read in [Matter](https://getmatter.com), synthesized into topic pages by an LLM, and printable as a physical book. Inspired by [Karpathy's llm-wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): knowledge is synthesized once at ingestion time, not re-derived at query time. The LLM does the bookkeeping; I only read.
+A graph of everything I read in [Matter](https://getmatter.com), one page per item, printable as a physical book. Nothing is written for the wiki; it is the reading record itself. The only authored signal is what I saved, what I finished, and what I starred.
 
-Private, single-user. Matter is the only input. There is no input box, no chat, and no manual page editing.
+Private. One user today; later each user brings their own Matter token (see Later). Matter is the only input. There is no input box, no editing, and no generated prose.
 
 ## Core principles
 
-- **Matter is the only input.** Nothing enters the wiki except through my Matter library. Saving to the queue adds a node; archiving triggers synthesis. There is no other way in.
-- **Archive is the gate.** Only finished reading is synthesized. Queued and in-progress items are visible in the graph as the frontier, but the LLM never writes about them.
-- **Frontload everything.** Topic pages, citations, and graph edges are built when an item is archived. Reading the wiki requires no LLM in the loop.
-- **Zero human writing.** All prose is LLM-generated from sources. My fingerprint is what I chose to read and finish.
+- **Matter is the only input.** Nothing enters the wiki except through my Matter library. Saving to the queue adds a node. There is no other way in.
+- **Archive is the gate for the book.** Only finished reading is printed. Queued and in-progress items are visible in the graph as the frontier.
+- **Zero writing.** Every word in the wiki comes from an article I chose to read. The wiki adds structure (state, links, selection), never prose; the only generated text is the few-word label on a link.
+- **Reading the wiki needs no model.** Embeddings, reranking, and labeling run at sync time; nothing is computed when a page is opened.
 - **The book is the output.** The wiki exists so that, at some point, it can be laid out and printed. Everything in the data model serves that.
 
 ## States
@@ -24,33 +24,30 @@ Matter has an inbox (a feed of writers and newsletters I follow), a queue (thing
 
 Archive means finished regardless of progress; many items are archived without scrolling to the end.
 
-## Architecture (three layers)
+## Architecture (two layers)
 
 1. **Sources** — one page per Matter item: metadata, state, progress, and the article body as Matter delivers it. Immutable apart from state changes. Private (copies of other people's writing).
-2. **Wiki** — synthesized topic pages in markdown. Mutable, densely linked, blog-style prose. Every claim cites a source. One representation serves the reader, the LLM, and the book.
-3. **Schema** — the conventions the LLM follows (page format, linking, citation, voice) and the data shapes in ARCHITECTURE.md.
+2. **Index** — every source's metadata plus labeled links between related articles, rebuilt after each sync. One file serves the graph, the list, and the book planner. Shapes in ARCHITECTURE.md.
+
+A server owns both layers and every job (sync, links, book). The web app is one client of that server, reading over an API; other clients, such as a reading page on my portfolio site, read the same public index. Nothing but the server touches Matter or the stored sources.
 
 ## Surfaces
 
 ### Graph (home)
-Force-directed graph of every source and topic page.
+Force-directed graph of every source.
 
-- **Sources** are circles, drawn by state as above. Radius scales with word count. Favorites carry a small amber dot.
-- **Topic pages** are diamonds in the accent color.
-- **Citation edges** (solid) run from archived sources to the topic pages that cite them, and between topic pages that link each other.
-- **Similarity edges** (dotted) attach queued and reading items to their nearest topic pages, computed from embeddings. They disappear when the item is archived and real citations replace them.
+- **Sources** are circles, drawn by state as above. Radius scales with word count.
+- **Related edges** (dotted) connect two articles a model judged related. Hovering an edge shows why in a few words; hovering a node highlights its edges.
 - Filters: by state, by favorite, by site, by word count. Each is a predicate on the index.
+- A legend under the graph explains the vocabulary.
 
-A list view shows the same data as a categorized table of contents.
-
-### Topic page
-Blog-style article with inline citations to source pages and `[[wiki-links]]` to other topic pages. Links to pages that don't exist yet render as plain text; there is no red-link generation.
+A list view shows the same sources grouped by state.
 
 ### Source page
-The Matter item rendered readably: title, author, site, state, progress, word count, and the article body. Visually distinct from topic pages. Never public.
+The Matter item rendered readably: title, author, site, state, progress, word count, archived date, a link to the original, the article body, and a Related list at the end with the reason for each link. Never public.
 
 ### Book builder
-Select sources (all archived, by topic, or by date range), preview the chapter plan, see a price quote, and order. Details under Book.
+Select sources (all archived, by date range, or hand-picked), preview the chapter plan, see a price quote, and order. Details under Book.
 
 ## Ingestion
 
@@ -58,25 +55,16 @@ A daily job pulls every queue and archive item from the Matter API using `update
 
 - New items get a source page with metadata and state. The article body (`?include=markdown`) is fetched once.
 - State and progress updates rewrite the source frontmatter; the graph reflects them on the next render.
-- Items that moved to `archived` and have not been synthesized are handed to synthesis.
-- Each new item is embedded (title + excerpt) for similarity edges. Topic pages are embedded when written.
+- Each item is embedded in full (title + body, images stripped). The nearest articles are reranked, then a model confirms which are related and writes a short label for each. Labels are the only generated text in the wiki, and they describe a relation, not the content.
 - Highlights and annotations are not fetched. Tags are not used.
 
 Matter hosts article images on its own CDN; the wiki and the book load images by URL and store no copies.
-
-## Synthesis
-
-Runs once per archived source. The LLM reads the index and the source, opens related topic pages, and decides placement: weave into an existing page, update several, or create a new one. Never blind-append. Pages are synthesis, not journals.
-
-- Topic pages link liberally (10–15 `[[wiki-links]]` max per page) and resolve every link against the alias map before creating a new target. Near-duplicate topics are the failure mode to avoid.
-- Every source-derived claim cites `[[source:<id>]]`. Citations are the graph's solid edges and the book's chapter membership.
-- The source is marked `synthesized_at` and the run is appended to `log.md`.
 
 ## Book
 
 A book is a selection of archived sources laid out as chapters.
 
-1. **Plan** — the LLM groups the selected sources into chapters keyed by topic page, orders the articles within each, and writes nothing new: the topic page is the chapter introduction.
+1. **Plan** — the selected sources are grouped into chapters and ordered within each. A chapter has a title and a list of articles; no introduction is written. Grouping follows the links and embeddings (see Open questions for whether a model names the chapters).
 2. **Interior** — articles are reflowed into print HTML (trim size, margins, running heads, page numbers, table of contents, per-article title block with author, site, and date archived) and rendered to `interior.pdf`.
 3. **Cover** — sized from the interior page count using the printer's spine calculation; typographic by default, optionally with a generated image. Rendered to `cover.pdf`.
 4. **Order** — price quote, confirmation, print job via Lulu's API, status until shipped. Both PDFs stay downloadable for any other printer.
@@ -85,18 +73,20 @@ Reprinting articles in a single personal copy is fine; the book is never sold or
 
 ## Later
 
-- **Lint**: periodic pass that fixes mechanical drift (missing backlinks, stale index) and surfaces contradictions between sources.
-- **Digest email**: what was synthesized, what's queued, what's unexplored.
-- **Suggestions**: web search around weak or growing topics; suggested reads are emailed and can be saved straight into the Matter queue via `POST /items`, where they enter the normal flow.
+- **Digest email**: what was archived, what's in progress, what's queued.
+- **Suggestions**: web search around recent reading; suggested reads are emailed and can be saved straight into the Matter queue via `POST /items`, where they enter the normal flow.
+- **Multi-user**: anyone allowed in can add their own Matter token; the server syncs each library separately and keeps each user's sources private to them. The graph stays per user; there is no shared graph.
+- **External clients**: a "my readings" page on my portfolio site shows the public graph from the server API. It needs no auth and no copy of the data.
 
 ## Scope
 
-**v1**: Matter sync, source pages, graph with states and similarity edges, synthesis of archived items, topic pages, book builder through printed copy.
+**v1**: Matter sync, source pages, graph with states and labeled links, book builder through printed copy.
 
-**Later**: lint, digest, suggestions, per-page public visibility.
+**Later**: digest, suggestions, multi-user, external clients.
 
 ## Open questions
 
 - Trim size and binding for the book (default: 6×9, hardcover, black-and-white interior).
 - Cover: typographic only, or a generated image.
-- Book unit: everything since the last book, or a hand-picked set of topics.
+- Book unit: everything since the last book, or a hand-picked set.
+- Chapter plan: cluster by embeddings with no model at all, or let a model group and title the chapters (it would still write no prose).

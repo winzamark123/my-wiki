@@ -4,29 +4,70 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 
 ## Stack at a glance
 
-- **App**: React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`
+- **Server** (`apps/server`): one Worker that owns every binding (R2, Workers AI, Workflows, cron) and serves an HTTP JSON API. Everything that talks to Matter or R2 lives here.
+- **Web** (`apps/web`): React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`. Reads from the server API only; no bindings of its own.
+- **Schema** (`packages/schema`): the Zod schemas both apps parse against (`index.json`, source frontmatter, links).
 - **Content store**: R2 (markdown, index, embeddings, book files)
-- **Jobs**: Cloudflare Workflows (Matter sync, synthesis, book build; later lint and digest)
-- **LLM**: GPT-5.6 Sol with high reasoning via OpenAI Responses and Cloudflare AI Gateway BYOK
-- **Embeddings**: Workers AI `@cf/baai/bge-base-en-v1.5` (768 dims) through the `AI` binding
+- **Jobs**: Cloudflare Workflows (Matter sync, book build; later digest and suggestions)
+- **Links**: Workers AI through the `AI` binding: `@cf/baai/bge-m3` embeddings (1024 dims), `@cf/baai/bge-reranker-base`, `@cf/meta/llama-3.3-70b-instruct-fp8-fast` for link labels
 - **PDF**: Browser Rendering (`@cloudflare/puppeteer`, `page.pdf()`) through the `BROWSER` binding
 - **Printing**: Lulu Print API (sandbox, then production)
 - **Graph UI**: d3-force layout, React SVG nodes
 - **Read caching**: Workers Cache driven by `Cache-Control`
-- **Auth**: Cloudflare Access on write endpoints and private paths
+- **Auth**: none until the book flow works end to end (M5); then Cloudflare Access on the web app's private paths and a bearer token between web and server
 - **Email**: Cloudflare Email Service (later: digest, suggestions, order status)
 
 ```
-Matter API ──daily──▶ MatterSyncWorkflow ──writes──▶ R2 sources/ + embeddings.json + index.json
-                             │ archived & not synthesized
-                             ▼
-                      SynthesisWorkflow ──LLM tool loop──▶ R2 wiki/  (citations → index.json edges)
+                 ┌──────────────── server (apps/server) ────────────────┐
+Matter API ──daily──▶ MatterSyncWorkflow ──writes──▶ R2 sources/ + embeddings.json + links.json + index.json
+                 │  GET /api/index · GET /api/sources/:id · POST /api/sync · /api/book/*   │
+                 └───────────────────────────▲──────────────────────────┘
+                                             │ HTTP JSON
+Browser ──▶ web (apps/web): SSR graph / source / book pages ─┘
+Portfolio site ──▶ GET /api/index (public, read-only) ───────┘
 
-Browser ──▶ Worker (SSR from R2, edge-cached) ──▶ graph / topic / source / book pages
-
-/book ──▶ BookWorkflow: plan (LLM) → interior.html → Browser Rendering → interior.pdf
-                        → Lulu cover dims → cover.pdf → quote → confirm → print job → status
+/book ──▶ BookWorkflow (server): plan → interior.html → Browser Rendering → interior.pdf
+                                 → Lulu cover dims → cover.pdf → quote → confirm → print job → status
 ```
+
+## Apps
+
+**Today** the repo is one Worker (`wiki-app`): React Router routes, the sync workflow, and the R2/AI bindings in one deploy. **Target** (milestone M2) is two Workers and a shared package in a pnpm workspace:
+
+```
+apps/server/      Worker my-wiki-server: R2, AI, Workflows, cron, HTTP API. All Matter and R2 access.
+apps/web/         Worker my-wiki-web: the React Router UI. Loaders call the server API over HTTP.
+packages/schema/  Zod schemas + pure helpers shared by both (no barrel file; import by path).
+```
+
+The rule: if code reads Matter, reads or writes R2, or calls a model, it is in the server. The web app is one client of the server; it gets no special access. Two reasons:
+
+1. Other clients will read the same data from other deployments. The first is a "my readings" page on my portfolio site, which needs only the public graph.
+2. More than one person will use it. Each user will add their own Matter token, and the server will sync each library on its own schedule (see Multi-user below).
+
+### Server API
+
+| Route | Returns |
+| --- | --- |
+| `GET /api/index` | `index.json` with `excerpt` removed; `Cache-Control: public, max-age=60`, CORS `*` |
+| `GET /api/sources/:id` | `{ meta, body }`; body is the Matter markdown, rendered by the client |
+| `POST /api/sync?full=1` | `{ id }` of the new `MatterSyncWorkflow` instance |
+| `GET /api/sync/:id` | instance status |
+| `POST /api/reindex` | dev only: rebuild index, embeddings, links |
+| `/api/book/*` | added in M3 |
+
+No auth until M5: the whole thing runs in dev until the book flow works end to end. The server can still be deployed on its own before that: with `workers_dev` off and no custom domain, no route is reachable, but the cron fires and fills R2. Five routes do not need a router library; a `switch` on `url.pathname` is enough until the book routes arrive, then reconsider.
+
+The web app reads `SERVER_URL` from its vars (`http://localhost:8787` in dev). A service binding from web to server is possible later for latency, but HTTP is the only contract so every client is treated the same.
+
+Local dev runs both Workers; they share one local R2 store by pointing both wrangler configs at the same persist directory.
+
+### Multi-user (milestone M7)
+
+- Identity: Cloudflare Access with One-time PIN on the web app, allow rule widened from one email to a list. The web app forwards the `Cf-Access-Jwt-Assertion` header; the server verifies the JWT against the team's public keys and uses the email as the user id.
+- Matter token: `PUT /api/me/matter-token`, validated with one `GET /items?limit=1` call, then stored AES-GCM encrypted (key in the `TOKEN_KEY` secret) in `users/<id>/settings.json`. The `MATTER_API_TOKEN` Worker secret goes away.
+- Data: every R2 key moves under `users/<id>/`; the flat layout below is the single-user form. `GET /api/index` becomes `GET /api/users/:id/index`.
+- Cron: the scheduled handler lists users and starts one `MatterSyncWorkflow` per user with `{ userId }`. Matter rate limits are per token, so user syncs do not compete.
 
 ## External APIs
 
@@ -48,12 +89,11 @@ Browser ──▶ Worker (SSR from R2, edge-cached) ──▶ graph / topic / so
 
 ```
 sources/<matterId>.md     one per queue/archive item; frontmatter below, body = Matter markdown
-wiki/<slug>.md            synthesized topic pages
-index.json                everything the graph and the LLM need (schema below)
-embeddings.json           vectors, read only by the sync job
+index.json                everything the graph needs (schema below)
+embeddings.json           one vector per source, read only by the sync job
+links.json                every judged pair with its label (or null when rejected)
 sync.json                 { cursor: <updated_since ISO>, lastRun }
-log.md                    append-only record of syncs, syntheses, book builds
-history/<slug>/<ts>.md    previous versions of topic pages, copied on every write
+log.md                    append-only record of syncs and book builds
 books/<bookId>/           manifest.json · interior.html · interior.pdf · cover.pdf · status.json
 ```
 
@@ -74,94 +114,100 @@ progress: 1.0                  # Matter reading_progress, kept for all states, m
 favorite: false
 excerpt: …                     # optional
 archived_at: 2026-08-20T…      # set the first sync that sees state=archived
-synthesized_at: 2026-08-21T…   # set by SynthesisWorkflow; absent until then
 matter_updated_at: 2026-08-20T…
 ```
 
 State derives from Matter: `archive` → `archived`; `queue` with `reading_progress > 0` → `reading`; otherwise `queued`. Inbox items are never fetched.
 
-### Topic page frontmatter (`wiki/<slug>.md`)
-
-```yaml
-title: Home servers
-aliases: homelab, home lab     # optional, comma-separated
-```
-
-Body conventions: `[[wiki-links]]` to other topic pages (resolved via aliases), `[[source:itm_…]]` citations.
-
 ### `index.json`
 
 ```ts
 {
-  pages: { slug, title, summary, links: slug[], cites: matterId[] }[],
-  sources: (SourceFrontmatter & {   // same fields and names as the source frontmatter above
-    near: slug[]               // nearest topic pages by embedding, only for non-archived
-  })[],
-  aliases: Record<string, slug>
+  sources: SourceFrontmatter[],            // same fields and names as the source frontmatter above
+  links: { a: matterId, b: matterId, label: string }[]   // one entry per related pair
 }
 ```
-
-Graph edges are derived: `pages[].links` (page→page), `pages[].cites` (page→source, solid), `sources[].near` (source→page, dotted, only while not archived). The LLM prompt sees `pages` without `links`/`cites` plus a compact `sources` list.
 
 ### `embeddings.json`
 
 ```ts
-{ model: "@cf/baai/bge-base-en-v1.5", dims: 768,
-  vectors: Record<string /* matterId | "wiki:"+slug */, { text: string, vector: number[] }> }  // text kept to detect stale vectors
+{ model: "@cf/baai/bge-m3", dims: 1024,
+  vectors: Record<matterId, { hash: string, vector: number[] }> }   // sha-256 of the embedded text detects stale vectors
 ```
 
-Input text: `title + "\n" + excerpt` for sources, `title + "\n" + summary` for topic pages, cls pooling. `regenerateIndex` embeds whatever is missing or changed and fills `near` (top 2 pages with cosine ≥ 0.65) for non-archived sources, so every write path gets edges for free. Nearest-neighbour is brute-force cosine in the Worker; at personal scale (hundreds to low thousands of vectors) this is milliseconds. Upgrade path if it ever matters: Vectorize.
+### `links.json`
+
+```ts
+{ pairs: Record<"a|b" /* sorted ids */, { label: string | null }>,   // null = judged and rejected, never asked again
+  evaluated: Record<matterId, hash> }                                 // which text each source was last linked with
+```
+
+## Links
+
+Links are computed at sync time, per source, in three stages, all through the `AI` binding:
+
+1. **Candidates.** The source's embedding (title + full body, images and link targets stripped, up to 8192 tokens) is compared with every other vector by cosine; the top 8 are candidates. Brute force in the Worker; at personal scale this is milliseconds. Upgrade path if it ever matters: Vectorize.
+2. **Rerank.** `bge-reranker-base` reads the source and each candidate together (the first ~1,500 characters of each) and scores them 0–1. Keep up to 4 with score ≥ 0.2.
+3. **Verdict and label.** Llama 3.3 70B gets the same heads and returns JSON per candidate: related or not, plus a label of at most 8 words saying what they share. Accepted pairs get the label; rejected pairs are stored with `null`.
+
+A source is (re)linked when its embedded text hash changes, which happens once: when the body is first fetched. Every pair is judged once, from whichever side saw it first, so the LLM cost is per new article, not per sync. The graph draws `index.json.links` and shows the label on hover; the source page lists them under Related. Tunables live at the top of `app/lib/links.server.ts`.
 
 ## Workflows
 
-Every background job is a Workflow: each action is a `step.do` checkpoint, LLM waits cost no CPU, dynamic step counts are supported, and cron is a `schedules` entry on the binding. Step params and results must be serializable and ≤ 1 MiB, so steps pass ids and summaries, never article bodies.
+Every background job is a Workflow: each action is a `step.do` checkpoint, dynamic step counts are supported, and cron is a `schedules` entry on the binding. Step params and results must be serializable and ≤ 1 MiB, so steps pass ids and summaries, never article bodies.
 
 **`MatterSyncWorkflow`** — cron daily, also triggerable from `/api/sync`.
 1. Read `sync.json` cursor.
 2. Page `GET /items?status=queue,archive&order=updated&updated_since=cursor`.
-3. For each item: compute state; if new, fetch markdown (one step per item, `step.sleep` to stay under 20/min) and embed; write `sources/<id>.md` (metadata always, body only on first sight or when `processing_status` changed).
-4. For non-archived items, recompute `near` against topic-page vectors.
-5. Regenerate `index.json`. Advance cursor.
-6. For each source with `state=archived` and no `synthesized_at`, create a `SynthesisWorkflow` instance, capped per run by `MAX_SYNTHESES_PER_RUN`.
+3. For each item: compute state; if new, fetch markdown (spaced to stay under 20/min); write `sources/<id>.md` (metadata always, body only on first sight).
+4. Regenerate `index.json`: embed new or changed sources, return the ids not yet linked.
+5. Link those ids in steps of 5 (each costs a reranker call and an LLM call), then regenerate `index.json` again so it carries the new links. Advance cursor.
 
 First run has no cursor and backfills everything (47 archived, 86 queued today).
 
-**`SynthesisWorkflow`** — one archived source. The existing tool loop (`read_page`, `write_page`) plus `read_source`. Input: index projection, the source page. Output: topic pages written through the write seam; source marked `synthesized_at`; topic-page embeddings refreshed; log entry.
-
 **`BookWorkflow`** — on demand from `/book`.
-1. Selection → LLM plans chapters (`manifest.json`: chapters keyed by topic slug, ordered source ids).
-2. Render `interior.html` (print CSS: `@page` size and margins, running heads, page numbers, TOC, chapter intro = topic page body, article title blocks) → Browser Rendering → `interior.pdf`; read page count.
+1. Selection → chapter plan (`manifest.json`: chapters with a title and ordered source ids). Grouping by embedding similarity; whether a model titles the chapters is open (DESIGN.md → Open questions).
+2. Render `interior.html` (print CSS: `@page` size and margins, running heads, page numbers, TOC, chapter title pages, article title blocks) → Browser Rendering → `interior.pdf`; read page count.
 3. Lulu cover dimensions → `cover.html` → `cover.pdf`.
 4. Lulu cost quote → `status.json` → `step.waitForEvent("confirm")`.
 5. Lulu print job with signed R2 URLs for both PDFs → poll status → email.
 
-## Write seam
+## Writes
 
-All content writes go through `writePage` / `writeSource`: copy previous version to `history/` (topic pages only), write to R2, regenerate `index.json`, purge affected cache URLs. Git mirror via the GitHub Git Data API remains a later addition behind the same seam.
+Sources are written by the sync job only (`writeSource`); `index.json`, `embeddings.json`, and `links.json` are updated once per sync. Only the server touches R2. Source pages are served with `no-store`; the graph is edge-cached for 60 s, so a sync is visible within a minute. Cache purge on write is a later addition.
 
-## Frontend
+## Web app
 
 React Router v8 framework mode on Workers (see git history for the Astro/SPA comparison). Routes:
 
-- `/` graph + list. Loader reads `index.json`; the client runs d3-force and draws SVG nodes per the state vocabulary in DESIGN.md.
-- `/wiki/:slug` topic page (SSR from R2, edge-cached).
-- `/source/:id` source page (private).
-- `/book` builder; `/api/book/*` create, confirm, status; `/api/sync` manual trigger; `/api/reindex`.
+- `/` graph + list. Loader calls `GET /api/index`; the client runs d3-force and draws SVG nodes per the state vocabulary in DESIGN.md.
+- `/source/:id` source page with its Related list (private). Loader calls `GET /api/sources/:id` and renders the markdown with `marked`.
+- `/book` builder (M3), backed by the server's `/api/book/*`.
 
-Removed from the previous design: input box, `api/input`, `api/jobs`, red-link streaming route, `ResumableStreamDO`.
+Until M2 lands, the loaders read R2 directly and `/api/sync` and `/api/reindex` are routes of this app.
+
+Removed from earlier designs: input box, red-link generation, LLM-written topic pages, `/wiki/:slug`.
 
 ## Auth & visibility
 
-Cloudflare Access gates `/book`, `/source/*`, and every `/api/*` route, using the **One-time PIN** login method (email code, no Google or other SSO; free on the Zero Trust plan). Allow rule: my email only. Access requires the app to be on a custom domain in the account. Topic pages and the graph are publicly readable with no auth; public renders cite the original article URL rather than the private source page.
+Nothing is public before M5; both Workers keep `workers_dev` off and have no custom domain. When the site goes live: Cloudflare Access gates the web app's `/book*` and `/source/*` paths, using the **One-time PIN** login method (email code, no Google or other SSO; free on the Zero Trust plan). Allow rule: my email only. Access requires the app to be on a custom domain in the account. The graph is publicly readable with no auth; it shows titles and sites only, and its nodes link to private source pages.
+
+The server is not behind Access. `GET /api/index` is public; every other route checks an `API_TOKEN` bearer that the web app sends server side. Browsers never call the private server routes directly.
 
 ## Secrets and bindings
 
-Secrets: `CF_AIG_TOKEN`, `MATTER_API_TOKEN`, `LULU_CLIENT_KEY`, `LULU_CLIENT_SECRET`. Vars: `OPENAI_BASE_URL`, `OPENAI_MODEL`, `LULU_BASE_URL`, `BOOK_POD_PACKAGE_ID`, `MAX_SYNTHESES_PER_RUN`. Bindings: `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `SYNTHESIS`, `BOOK`. Browser Rendering requires the Workers Paid plan.
+Server secrets: `MATTER_API_TOKEN` (until M7), `LULU_CLIENT_KEY`, `LULU_CLIENT_SECRET`, and from M5 `API_TOKEN`; vars `LULU_BASE_URL`, `BOOK_POD_PACKAGE_ID`; bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. Browser Rendering requires the Workers Paid plan.
+
+Web vars: `SERVER_URL`; from M5 the `API_TOKEN` secret. No bindings.
 
 ## Milestones
 
-1. **Sync + graph**: `MatterSyncWorkflow`, source pages, embeddings, `index.json` with sources and `near`, graph view with the state vocabulary. No LLM. Verify: run sync, see the library as correctly labeled nodes.
-2. **Synthesis**: `SynthesisWorkflow` on archived sources, citations, topic pages. Remove input-box and red-link code. Verify: archive an item in Matter → next sync → a topic page cites it.
-3. **Book PDFs**: `BookWorkflow` through interior and cover PDF download. Verify: open PDFs, check size and bleed against Lulu's template.
-4. **Lulu order**: cover dimensions, quote, sandbox order, status, email. Then production.
-5. **Upkeep**: lint, digest, suggestions with save-to-Matter.
+Tracked in Linear (project my-wiki). Each milestone's issues are ordered by blocking relations; an issue that blocks nothing can run in parallel.
+
+1. **Sync + graph**: `MatterSyncWorkflow`, source pages, embeddings, `index.json` with labeled links, graph view with the state vocabulary. Verify: run sync, see the library as correctly labeled nodes. Done.
+2. **Server + client split**: workspace layout, `apps/server` with the API and all bindings, `apps/web` reading over HTTP, CORS for external clients. Verify: both Workers run locally, the graph and source pages render from the API, the web app has no bindings.
+3. **Book PDFs**: `BookWorkflow` through interior and cover PDF download, all in dev. Verify: open PDFs, check size and bleed against Lulu's template.
+4. **Lulu order**: cover dimensions, quote, sandbox order, status, email. Then a production order from dev and a physical proof.
+5. **Access + deploy**: only after the wiki-to-book flow works end to end. Custom domain for both Workers, Access with One-time PIN on web, `API_TOKEN`, first production sync.
+6. **Upkeep**: digest, suggestions with save-to-Matter.
+7. **Multi-user**: identity from the Access JWT, per-user Matter token, per-user data prefix and cron fan-out.

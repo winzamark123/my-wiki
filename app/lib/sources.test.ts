@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MatterItem } from "./matter.server";
-import { deriveState, serializeSource, sourceFrontmatterSchema, sourceMetaFromItem } from "./sources";
-import { parseFrontmatter } from "./wiki";
+import { cleanBody, deriveState, parseFrontmatter, serializeSource, sourceFrontmatterSchema, sourceMetaFromItem } from "./sources";
 
 const item: MatterItem = {
   id: "itm_abc",
@@ -32,7 +31,7 @@ describe("deriveState", () => {
 });
 
 describe("sourceMetaFromItem", () => {
-  it("flattens multi-line fields and keeps the wiki-owned timestamps", () => {
+  it("flattens multi-line fields and leaves archived_at unset while reading", () => {
     const meta = sourceMetaFromItem({ item, now: "2026-08-22T12:00:00Z" });
     expect(meta.title).toBe("A title with a newline");
     expect(meta.excerpt).toBe("line one line two");
@@ -48,11 +47,10 @@ describe("sourceMetaFromItem", () => {
     expect(first.archived_at).toBe("2026-08-22T12:00:00Z");
     const later = sourceMetaFromItem({
       item: { ...item, status: "archive", updated_at: "2026-08-23T00:00:00Z" },
-      previous: { ...first, synthesized_at: "2026-08-22T13:00:00Z" },
+      previous: first,
       now: "2026-08-23T01:00:00Z",
     });
     expect(later.archived_at).toBe("2026-08-22T12:00:00Z");
-    expect(later.synthesized_at).toBe("2026-08-22T13:00:00Z");
   });
 });
 
@@ -63,5 +61,12 @@ describe("serializeSource", () => {
     const { attrs, body } = parseFrontmatter(raw);
     expect(body).toBe("# Body\n\nText: with colon");
     expect(sourceFrontmatterSchema.parse(attrs)).toEqual(meta);
+  });
+});
+
+describe("cleanBody", () => {
+  it("drops images, keeps link text, and removes Matter's escapes", () => {
+    const body = "Intro ![alt](https://media.getmatter.app/a.png) see [the paper](https://x.com/p)\\.\n\n\n\nNext up\\-and\\-coming";
+    expect(cleanBody(body)).toBe("Intro see the paper.\n\nNext up-and-coming");
   });
 });
