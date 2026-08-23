@@ -97,6 +97,3 @@
 .prose a[data-wiki-link] {
   @apply no-underline border-b border-dashed border-blue-500/50 font-normal text-blue-600 dark:border-blue-400/50 dark:text-blue-400;
 }
-.prose a[data-red-link] {
-  @apply text-destructive border-destructive/40;
-}

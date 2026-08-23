@@ -1,5 +1,5 @@
 # AI Gateway Run token; the OpenAI key stays in Cloudflare BYOK
 CF_AIG_TOKEN=cfat_...
 
-# for the local mock only:
-# OPENAI_BASE_URL=http://localhost:8788
+# Matter personal access token (web.getmatter.com/settings → Generate API Token)
+MATTER_API_TOKEN=mat_...

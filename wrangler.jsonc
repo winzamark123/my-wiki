@@ -18,24 +18,12 @@
 	"compatibility_flags": ["nodejs_compat", "enable_request_signal"],
 	// edge-caches responses per Cache-Control headers; hits skip the Worker
 	"cache": { "enabled": true },
+	// embeddings for similarity edges
+	"ai": { "binding": "AI" },
 	"r2_buckets": [
 		{
 			"binding": "WIKI",
 			"bucket_name": "my-wiki"
-		}
-	],
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "RED_LINK_STREAM",
-				"class_name": "ResumableStreamDO"
-			}
-		]
-	},
-	"migrations": [
-		{
-			"tag": "v1",
-			"new_sqlite_classes": ["ResumableStreamDO"]
 		}
 	],
 	"workflows": [
@@ -43,6 +31,13 @@
 			"name": "synthesis",
 			"binding": "SYNTHESIS_WORKFLOW",
 			"class_name": "SynthesisWorkflow"
+		},
+		{
+			"name": "matter-sync",
+			"binding": "MATTER_SYNC",
+			"class_name": "MatterSyncWorkflow",
+			// daily pull of the Matter queue + archive
+			"schedules": ["0 6 * * *"]
 		}
 	],
 	"vars": {

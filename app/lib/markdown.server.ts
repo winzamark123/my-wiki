@@ -3,7 +3,7 @@ import { existingSlugs, resolveSlug, WIKI_LINK_RE, type WikiIndex } from "./wiki
 
 const ANCHORED_WIKI_LINK = new RegExp(`^${WIKI_LINK_RE.source}`);
 
-// [[Page Name]] / [[target|label]] → internal links; missing targets render as red links
+// [[Page Name]] / [[target|label]] → internal links; targets without a page render as plain text
 export function renderMarkdown(body: string, index: WikiIndex) {
   const existing = existingSlugs(index);
   const wikiLink: TokenizerAndRendererExtension = {
@@ -22,9 +22,13 @@ export function renderMarkdown(body: string, index: WikiIndex) {
     },
     renderer(token) {
       const slug = resolveSlug(token.target, index.aliases);
-      const red = existing.has(slug) ? "" : " data-red-link";
-      return `<a href="/wiki/${slug}" data-wiki-link${red}>${token.label}</a>`;
+      return existing.has(slug) ? `<a href="/wiki/${slug}" data-wiki-link>${token.label}</a>` : token.label;
     },
   };
   return new Marked({ extensions: [wikiLink] }).parse(body, { async: false });
+}
+
+// source bodies are Matter's CommonMark; no wiki-link grammar applies
+export function renderPlainMarkdown(body: string) {
+  return new Marked().parse(body, { async: false });
 }

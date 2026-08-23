@@ -2,9 +2,7 @@ import { env } from "cloudflare:workers";
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/wiki-page";
-import { RedLinkPage } from "~/components/red-link-page";
 import { renderMarkdown } from "~/lib/markdown.server";
-import { referringPages } from "~/lib/wiki";
 import { CACHE_HEADERS, getIndex, getPage } from "~/lib/wiki.server";
 
 export function meta({ loaderData }: Route.MetaArgs) {
@@ -22,20 +20,9 @@ export async function loader({ params }: Route.LoaderArgs) {
     getIndex(env.WIKI),
   ]);
   if (!page) {
-    // missing targets generate only after this page hydrates, never from a crawler GET
-    const isRedLink = referringPages(index, params.slug).length > 0;
-    return data(
-      { slug: params.slug, title: null, html: null, index, isRedLink },
-      { status: 404, headers: { "Cache-Control": "no-store" } },
-    );
+    return data({ slug: params.slug, title: null, html: null }, { status: 404, headers: { "Cache-Control": "no-store" } });
   }
-  return {
-    slug: page.slug,
-    title: page.title,
-    html: renderMarkdown(page.body, index),
-    index: null,
-    isRedLink: false,
-  };
+  return { slug: page.slug, title: page.title, html: renderMarkdown(page.body, index) };
 }
 
 export default function WikiPage({ loaderData }: Route.ComponentProps) {
@@ -47,15 +34,10 @@ export default function WikiPage({ loaderData }: Route.ComponentProps) {
           ← index
         </Link>
       </nav>
-      {html === null && loaderData.isRedLink ? (
-        <RedLinkPage key={slug} slug={slug} index={loaderData.index} />
-      ) : html === null ? (
+      {html === null ? (
         <>
-          <h1 className="text-2xl font-semibold text-destructive/80">{slug}</h1>
-          <p className="mt-6 text-muted-foreground">
-            This page hasn't been written yet. Drop something into the input box to bring it
-            to life.
-          </p>
+          <h1 className="text-2xl font-semibold">{slug}</h1>
+          <p className="mt-6 text-muted-foreground">No topic page with this name yet.</p>
         </>
       ) : (
         <article

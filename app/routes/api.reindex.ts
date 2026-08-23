@@ -8,6 +8,6 @@ export async function action() {
   if (!import.meta.env.DEV) {
     return data({ error: "not found" }, { status: 404 });
   }
-  const index = await regenerateIndex(env.WIKI);
+  const index = await regenerateIndex(env.WIKI, env.AI);
   return { pages: index.pages.length };
 }

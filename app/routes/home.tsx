@@ -1,7 +1,11 @@
 import { env } from "cloudflare:workers";
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
 
 import type { Route } from "./+types/home";
+import { Graph } from "~/components/graph";
+import { sourceStates } from "~/lib/sources";
+import type { IndexSource } from "~/lib/wiki";
 import { CACHE_HEADERS, getIndex } from "~/lib/wiki.server";
 
 export function meta() {
@@ -13,32 +17,138 @@ export function headers() {
 }
 
 export async function loader() {
-  const index = await getIndex(env.WIKI);
-  return { pages: index.pages };
+  const { pages, sources } = await getIndex(env.WIKI);
+  // the graph doesn't need excerpts; keep the payload small
+  return { pages, sources: sources.map(({ excerpt: _excerpt, ...rest }) => rest) };
 }
 
+type State = IndexSource["state"];
+
+const chipClass = (active: boolean) =>
+  `rounded-full border px-3 py-1 text-sm ${active ? "border-foreground bg-foreground text-background" : "border-border text-muted-foreground hover:border-foreground"}`;
+
 export default function Home({ loaderData }: Route.ComponentProps) {
-  const { pages } = loaderData;
+  const { pages, sources } = loaderData;
+  const [view, setView] = useState<"graph" | "list">("graph");
+  const [states, setStates] = useState<Set<State>>(new Set(sourceStates));
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [site, setSite] = useState("");
+  const [minWords, setMinWords] = useState(0);
+
+  const counts = useMemo(
+    () => Object.fromEntries(sourceStates.map((state) => [state, sources.filter((s) => s.state === state).length])),
+    [sources],
+  );
+  const sites = useMemo(
+    () => [...new Set(sources.map((s) => s.site).filter((s): s is string => Boolean(s)))].sort(),
+    [sources],
+  );
+  const visible = useMemo(
+    () =>
+      sources.filter(
+        (s) =>
+          states.has(s.state) &&
+          (!favoritesOnly || s.favorite) &&
+          (!site || s.site === site) &&
+          (s.word_count ?? 0) >= minWords,
+      ),
+    [sources, states, favoritesOnly, site, minWords],
+  );
+  const filtered = useMemo(() => ({ pages, sources: visible }), [pages, visible]);
+
+  function toggleState(state: State) {
+    setStates((prev) => {
+      const next = new Set(prev);
+      if (next.has(state)) next.delete(state);
+      else next.add(state);
+      return next;
+    });
+  }
+
   return (
-    <main className="mx-auto max-w-2xl px-4 py-12">
-      <h1 className="text-2xl font-semibold">Wiki</h1>
-      {pages.length === 0 ? (
-        <p className="mt-6 text-muted-foreground">
-          Nothing here yet. Drop a thought into the input box to create the first page.
-        </p>
-      ) : (
-        <ul className="mt-6 space-y-4">
-          {pages.map((page) => (
-            <li key={page.slug}>
-              <Link to={`/wiki/${page.slug}`} className="font-medium hover:underline">
-                {page.title}
-              </Link>
-              {page.summary && (
-                <p className="text-sm text-muted-foreground">{page.summary}</p>
-              )}
-            </li>
+    <main className="mx-auto max-w-6xl px-4 py-8">
+      <header className="mb-4 flex flex-wrap items-center gap-3">
+        <h1 className="mr-auto text-2xl font-semibold">Wiki</h1>
+        <div className="flex gap-2">
+          {(["graph", "list"] as const).map((v) => (
+            <button key={v} type="button" className={chipClass(view === v)} onClick={() => setView(v)}>
+              {v}
+            </button>
           ))}
-        </ul>
+        </div>
+      </header>
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+        {sourceStates.map((state) => (
+          <button key={state} type="button" className={chipClass(states.has(state))} onClick={() => toggleState(state)}>
+            {state} · {counts[state]}
+          </button>
+        ))}
+        <button type="button" className={chipClass(favoritesOnly)} onClick={() => setFavoritesOnly((v) => !v)}>
+          favorites
+        </button>
+        <select
+          value={site}
+          onChange={(e) => setSite(e.target.value)}
+          className="rounded-full border border-border bg-background px-3 py-1"
+        >
+          <option value="">all sites</option>
+          {sites.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <select
+          value={minWords}
+          onChange={(e) => setMinWords(Number(e.target.value))}
+          className="rounded-full border border-border bg-background px-3 py-1"
+        >
+          {[0, 1000, 3000, 5000].map((n) => (
+            <option key={n} value={n}>
+              {n ? `${n.toLocaleString()}+ words` : "any length"}
+            </option>
+          ))}
+        </select>
+        <span className="text-muted-foreground">
+          {visible.length} sources · {pages.length} topic pages
+        </span>
+      </div>
+
+      {view === "graph" ? (
+        <Graph index={filtered} />
+      ) : (
+        <div className="grid gap-8 md:grid-cols-2">
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Topic pages</h2>
+            {pages.length === 0 && <p className="text-muted-foreground">No topic pages yet.</p>}
+            <ul className="space-y-3">
+              {pages.map((page) => (
+                <li key={page.slug}>
+                  <Link to={`/wiki/${page.slug}`} className="font-medium hover:underline">
+                    {page.title}
+                  </Link>
+                  {page.summary && <p className="text-sm text-muted-foreground">{page.summary}</p>}
+                </li>
+              ))}
+            </ul>
+          </section>
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Sources</h2>
+            <ul className="space-y-2">
+              {visible.map((s) => (
+                <li key={s.matter_id} className="flex items-baseline gap-2">
+                  <span className="w-16 shrink-0 text-xs text-muted-foreground">
+                    {s.state === "reading" ? `${Math.round(s.progress * 100)}%` : s.state}
+                  </span>
+                  <Link to={`/source/${s.matter_id}`} className="hover:underline">
+                    {s.title}
+                  </Link>
+                  {s.site && <span className="text-xs text-muted-foreground">{s.site}</span>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
       )}
     </main>
   );

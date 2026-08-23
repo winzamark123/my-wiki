@@ -227,7 +227,7 @@ export class SynthesisWorkflow extends WorkflowEntrypoint<Env, SynthesisParams> 
       if (!input.success) return `invalid input: ${input.error.message}`;
       const slug = slugify(input.data.slug);
       const output = await step.do(`write ${slug} (turn ${turn}, ${call.call_id})`, async () => {
-        await writePage({ bucket: this.env.WIKI, slug, content: input.data.content });
+        await writePage({ bucket: this.env.WIKI, ai: this.env.AI, slug, content: input.data.content });
         return `wrote ${slug}`;
       });
       if (!written.includes(slug)) written.push(slug);

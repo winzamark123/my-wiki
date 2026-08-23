@@ -1,125 +1,167 @@
 # Architecture
 
-How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this says *with which primitives and why*. Decisions here were made against docs current as of July 2026.
+How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this says *with which primitives and why*. Decisions here were made against docs current as of August 2026.
 
 ## Stack at a glance
 
 - **App**: React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`
-- **Content store**: R2 (markdown, images, index/graph JSON) — the live copy
-- **Jobs**: Cloudflare Workflows (multi-page synthesis, Matter polling, lint, digest); a Durable Object carries resumable single-page red-link streams
-- **LLM**: GPT-5.6 Sol with high reasoning via OpenAI Responses and Cloudflare AI Gateway BYOK (direct OpenAI billing, metadata-only gateway logs)
-- **Read caching**: Workers Cache (`"cache": {"enabled": true}`) driven by `Cache-Control` headers
-- **Auth**: Cloudflare Access on write endpoints and private paths; wiki pages publicly readable
-- **Email**: Cloudflare Email Service `send_email` binding (digest)
-- **History**: R2 previous-version copies day one; GitHub mirror via Git Data API later
+- **Content store**: R2 (markdown, index, embeddings, book files)
+- **Jobs**: Cloudflare Workflows (Matter sync, synthesis, book build; later lint and digest)
+- **LLM**: GPT-5.6 Sol with high reasoning via OpenAI Responses and Cloudflare AI Gateway BYOK
+- **Embeddings**: Workers AI `@cf/baai/bge-base-en-v1.5` (768 dims) through the `AI` binding
+- **PDF**: Browser Rendering (`@cloudflare/puppeteer`, `page.pdf()`) through the `BROWSER` binding
+- **Printing**: Lulu Print API (sandbox, then production)
+- **Graph UI**: d3-force layout, React SVG nodes
+- **Read caching**: Workers Cache driven by `Cache-Control`
+- **Auth**: Cloudflare Access on write endpoints and private paths
+- **Email**: Cloudflare Email Service (later: digest, suggestions, order status)
 
 ```
-Browser / crawler
-   │
-   ▼
-Worker (React Router SSR)
-   ├─ read: R2 .md → render → HTML, Cache-Control → edge-cached (cache hits skip the Worker)
-   ├─ write: input box POST → Workflow instance created → returns instantly
-   └─ toast: UI polls workflow status endpoint
-   
-Workflows (one durable step per LLM call / R2 read / R2 write / web fetch)
-   ├─ LLM calls → AI Gateway → OpenAI Responses
-   └─ on finish: write pages via the write seam, regenerate index.json + sitemap, purge cache
+Matter API ──daily──▶ MatterSyncWorkflow ──writes──▶ R2 sources/ + embeddings.json + index.json
+                             │ archived & not synthesized
+                             ▼
+                      SynthesisWorkflow ──LLM tool loop──▶ R2 wiki/  (citations → index.json edges)
 
-Write seam (single function all writes go through)
-   ├─ copy previous version → history/ (undo)
-   ├─ write .md to R2
-   ├─ regenerate index.json / sitemap.xml
-   ├─ purge affected URLs from edge cache
-   └─ [later] enqueue git mirror commit
+Browser ──▶ Worker (SSR from R2, edge-cached) ──▶ graph / topic / source / book pages
+
+/book ──▶ BookWorkflow: plan (LLM) → interior.html → Browser Rendering → interior.pdf
+                        → Lulu cover dims → cover.pdf → quote → confirm → print job → status
 ```
 
-## Frontend
+## External APIs
 
-**React Router v8 framework mode on Workers**, with shadcn/ui.
+**Matter** (`https://api.getmatter.com/public/v1`, Bearer `mat_…`, Pro required, one active token):
+- `GET /items?status=queue,archive&order=updated&updated_since=<iso>&limit=100&cursor=` — incremental sync
+- `GET /items/{id}?include=markdown` — article body, 20 requests/min
+- `POST /items {url, status}` — later, for suggestions
+- Limits: 120 reads/min, 5/s burst. No webhooks. No publish date in the item.
+- Item fields used: `id`, `title`, `url`, `site_name`, `author.name`, `status`, `processing_status`, `content_type`, `word_count`, `reading_progress`, `excerpt`, `is_favorite`, `library_position`, `updated_at`. Inline article images are hosted on `media.getmatter.app`; Matter's 600×600 hero thumbnails (`image_url`) are not used.
 
-- Why not plain Worker-rendered HTML: the interactive surface (persistent input box, toasts, highlight-selection popup, graph view, status line) shares state across every page — one React tree fits it; shadcn requires React anyway.
-- Why not Astro: shadcn components become islands needing cross-island state plumbing; Astro's zero-JS advantage evaporates once React ships. (Astro 6 + adapter v13 is the runner-up.)
-- Why not a SPA: crawlers and first-paint get an empty shell; the rendered page is never edge-cacheable as HTML. Worst fit for a read-heavy wiki.
-- R2 bindings in loaders via the `cloudflare:workers` `env` import. Dev runs in real workerd via the Vite plugin.
-
-**Reading feels static** because SSR responses carry `Cache-Control` and Workers Cache serves hits without executing the Worker. The build step builds only the shell; content is rendered from R2 per request (then cached), so a synthesis write is visible in seconds and content never waits on a deploy.
+**Lulu** (`https://api.lulu.com`, sandbox `https://api.sandbox.lulu.com`, OAuth2 client credentials):
+- `POST /calculate-cover-dimensions/ {pod_package_id, interior_page_count, unit}`
+- `POST /print-job-cost-calculations/`
+- `POST /print-jobs` with `line_items[{ printable_normalization: { interior.source_url, cover.source_url, pod_package_id }, quantity, title }]`, `shipping_address`, `shipping_level`
+- `GET /print-jobs/{id}/status/`
+- Package id encodes trim, color, paper, binding, e.g. `0600X0900.BW.STD.PB.060UW444.MXX` (6×9, B&W, paperback).
 
 ## R2 layout
 
 ```
-wiki/<slug>.md          synthesized articles (mutable)
-sources/<slug>.md       ingested content (immutable, always private)
-images/<id>             stored uploads/ingested images
-index.md                the map (human + LLM entry point)
-index.json              graph data, alias→slug map, page summaries
-log.md                  append-only ingest/synthesis/lint record
-history/<slug>/<ts>.md  previous versions, copied on every write (undo)
-sitemap.xml             regenerated on write, from index.json
+sources/<matterId>.md     one per queue/archive item; frontmatter below, body = Matter markdown
+wiki/<slug>.md            synthesized topic pages
+index.json                everything the graph and the LLM need (schema below)
+embeddings.json           vectors, read only by the sync job
+sync.json                 { cursor: <updated_since ISO>, lastRun }
+log.md                    append-only record of syncs, syntheses, book builds
+history/<slug>/<ts>.md    previous versions of topic pages, copied on every write
+books/<bookId>/           manifest.json · interior.html · interior.pdf · cover.pdf · status.json
 ```
 
-## Jobs: Workflows, not Queues
+## Schema
 
-Every background job is a Workflow. Rationale:
+### Source frontmatter (`sources/<id>.md`)
 
-- Jobs are multi-step agent loops (read index → read pages → several OpenAI calls → write several files). Each action is a `step.do` checkpoint — a flake at step 6 doesn't redo steps 1–5. A Queue consumer would retry the whole job.
-- Wall-clock per step is unlimited and awaiting an LLM response costs no CPU. Dynamic step counts (agent decides how many turns) are explicitly supported.
-- Cron is built in: workflow bindings take a `schedules` array — Matter polling, lint, and digest are cron expressions, no scheduled handler.
-- Constraint to design around: step params/results must be serializable and ≤ 1 MiB — carry slugs and summaries between steps, not blobs.
+```yaml
+matter_id: itm_8MQYb
+title: A farewell to the craft
+url: https://github.com/facundoolano/style-guide
+site: github.com
+author: Facundo Olano          # optional
+content_type: article          # article | pdf | podcast | video | tweet | newsletter
+word_count: 4364               # optional
+state: archived                # queued | reading | archived
+progress: 1.0                  # Matter reading_progress, kept for all states, meaningful for reading
+favorite: false
+excerpt: …                     # optional
+archived_at: 2026-08-20T…      # set the first sync that sees state=archived
+synthesized_at: 2026-08-21T…   # set by SynthesisWorkflow; absent until then
+matter_updated_at: 2026-08-20T…
+```
 
-Workflows in v1:
+State derives from Matter: `archive` → `archived`; `queue` with `reading_progress > 0` → `reading`; otherwise `queued`. Inbox items are never fetched.
 
-- `SynthesisWorkflow` — input-box submissions that may read and write several pages
-- `MatterPollWorkflow` — cron; polls Matter highlights feed, enqueues ingests
-- `LintWorkflow` — cron; mechanical self-heals + judgment calls surfaced to digest
-- `DigestWorkflow` — cron; renders digest from log/history, sends via Email Service
+### Topic page frontmatter (`wiki/<slug>.md`)
 
-Red-link generation is intentionally not a Workflow: navigating to one missing target opens an AI SDK UI-message stream, and a Durable Object keyed by slug deduplicates concurrent requests and replays in-flight chunks after refresh. The final validated markdown is written through `writePage`; Streamdown renders partial snapshots in the browser.
+```yaml
+title: Home servers
+aliases: homelab, home lab     # optional, comma-separated
+```
 
-**Toast**: v1 polls the workflow instance `status()` via a lightweight endpoint. Upgrade path: one Agents SDK Durable Object holding a WebSocket, using its `onWorkflowProgress` → `broadcast()` hook. Add only if polling latency annoys.
+Body conventions: `[[wiki-links]]` to other topic pages (resolved via aliases), `[[source:itm_…]]` citations.
 
-## LLM access
+### `index.json`
 
-The agent is a tool-use loop inside a Workflow with R2-backed tools (`read_index`, `read_page`, `write_page`) — no vector DB, no sandbox (per DESIGN.md). Calls use the OpenAI Responses API through an authenticated **AI Gateway**. The OpenAI service key lives in Cloudflare Secrets Store as the gateway's `default` BYOK key, so the Worker holds only a scoped AI Gateway Run token and OpenAI bills the project directly. Responses use `store: false`; gateway caching is bypassed and logs retain request metadata without prompt or response payloads.
+```ts
+{
+  pages: { slug, title, summary, links: slug[], cites: matterId[] }[],
+  sources: (SourceFrontmatter & {   // same fields and names as the source frontmatter above
+    near: slug[]               // nearest topic pages by embedding, only for non-archived
+  })[],
+  aliases: Record<string, slug>
+}
+```
+
+Graph edges are derived: `pages[].links` (page→page), `pages[].cites` (page→source, solid), `sources[].near` (source→page, dotted, only while not archived). The LLM prompt sees `pages` without `links`/`cites` plus a compact `sources` list.
+
+### `embeddings.json`
+
+```ts
+{ model: "@cf/baai/bge-base-en-v1.5", dims: 768,
+  vectors: Record<string /* matterId | "wiki:"+slug */, { text: string, vector: number[] }> }  // text kept to detect stale vectors
+```
+
+Input text: `title + "\n" + excerpt` for sources, `title + "\n" + summary` for topic pages, cls pooling. `regenerateIndex` embeds whatever is missing or changed and fills `near` (top 2 pages with cosine ≥ 0.65) for non-archived sources, so every write path gets edges for free. Nearest-neighbour is brute-force cosine in the Worker; at personal scale (hundreds to low thousands of vectors) this is milliseconds. Upgrade path if it ever matters: Vectorize.
+
+## Workflows
+
+Every background job is a Workflow: each action is a `step.do` checkpoint, LLM waits cost no CPU, dynamic step counts are supported, and cron is a `schedules` entry on the binding. Step params and results must be serializable and ≤ 1 MiB, so steps pass ids and summaries, never article bodies.
+
+**`MatterSyncWorkflow`** — cron daily, also triggerable from `/api/sync`.
+1. Read `sync.json` cursor.
+2. Page `GET /items?status=queue,archive&order=updated&updated_since=cursor`.
+3. For each item: compute state; if new, fetch markdown (one step per item, `step.sleep` to stay under 20/min) and embed; write `sources/<id>.md` (metadata always, body only on first sight or when `processing_status` changed).
+4. For non-archived items, recompute `near` against topic-page vectors.
+5. Regenerate `index.json`. Advance cursor.
+6. For each source with `state=archived` and no `synthesized_at`, create a `SynthesisWorkflow` instance, capped per run by `MAX_SYNTHESES_PER_RUN`.
+
+First run has no cursor and backfills everything (47 archived, 86 queued today).
+
+**`SynthesisWorkflow`** — one archived source. The existing tool loop (`read_page`, `write_page`) plus `read_source`. Input: index projection, the source page. Output: topic pages written through the write seam; source marked `synthesized_at`; topic-page embeddings refreshed; log entry.
+
+**`BookWorkflow`** — on demand from `/book`.
+1. Selection → LLM plans chapters (`manifest.json`: chapters keyed by topic slug, ordered source ids).
+2. Render `interior.html` (print CSS: `@page` size and margins, running heads, page numbers, TOC, chapter intro = topic page body, article title blocks) → Browser Rendering → `interior.pdf`; read page count.
+3. Lulu cover dimensions → `cover.html` → `cover.pdf`.
+4. Lulu cost quote → `status.json` → `step.waitForEvent("confirm")`.
+5. Lulu print job with signed R2 URLs for both PDFs → poll status → email.
+
+## Write seam
+
+All content writes go through `writePage` / `writeSource`: copy previous version to `history/` (topic pages only), write to R2, regenerate `index.json`, purge affected cache URLs. Git mirror via the GitHub Git Data API remains a later addition behind the same seam.
+
+## Frontend
+
+React Router v8 framework mode on Workers (see git history for the Astro/SPA comparison). Routes:
+
+- `/` graph + list. Loader reads `index.json`; the client runs d3-force and draws SVG nodes per the state vocabulary in DESIGN.md.
+- `/wiki/:slug` topic page (SSR from R2, edge-cached).
+- `/source/:id` source page (private).
+- `/book` builder; `/api/book/*` create, confirm, status; `/api/sync` manual trigger; `/api/reindex`.
+
+Removed from the previous design: input box, `api/input`, `api/jobs`, red-link streaming route, `ResumableStreamDO`.
 
 ## Auth & visibility
 
-- **Cloudflare Access** gates write endpoints (input box, highlight actions) and all private paths. No auth code in the app.
-- **Wiki pages are publicly readable** (indexable): SSR HTML + sitemap.xml + per-page meta make crawling work. Storage location (R2) is irrelevant to crawlability — crawlers see only what the Worker returns to an anonymous GET.
-- **Source pages stay private always**: they are copies of other people's articles; republishing is a copyright problem. Public wiki pages cite the original URL instead of the source page for anonymous readers.
-- Personal provenance ("from your note on …") on public renders: decide per-page; default to omitting quotes of my notes from anonymous views.
-- Flipping the whole site private (or per-page `public:` frontmatter flags, DESIGN.md v2) is a middleware change, not an architecture change.
+Cloudflare Access gates `/book`, `/source/*`, and every `/api/*` route, using the **One-time PIN** login method (email code, no Google or other SSO; free on the Zero Trust plan). Allow rule: my email only. Access requires the app to be on a custom domain in the account. Topic pages and the graph are publicly readable with no auth; public renders cite the original article URL rather than the private source page.
 
-## History & git mirror
+## Secrets and bindings
 
-R2 keeps no object history, and the agent edits autonomously with no approval flow — history is the safety net.
-
-- **Day one**: the write seam copies the previous version to `history/` before overwriting. Crude undo, kills the "LLM destroyed my page" risk without GitHub.
-- **Later (still in the design, cut from milestone 1)**: mirror to a GitHub repo via the **Git Data API** (blobs → tree → commit → ref = one atomic multi-file commit per synthesis job; no git binary needed). Fine-grained no-expiry PAT scoped to the mirror repo, stored as a Worker secret. Rate limits are a non-issue at personal volume.
-- **Revert** is app-initiated, not webhook-driven: a "restore version" action reads the old content (history/ or GitHub) and writes it back through the write seam, which mirrors forward as a new commit. No bidirectional sync.
-- The mirror is also the escape hatch: cloneable snapshot, portability, and the substrate for heavy whole-corpus maintenance (clone + run a coding agent against the filesystem — locally or in a Cloudflare Sandbox container; that's the sandbox's only slot in this system, and it's v2+).
-
-## Email
-
-Digest via the Email Service `send_email` binding from `DigestWorkflow`. Sending to my own verified address is free and quota-exempt. Service is Beta; Resend is a ~20-line swap if it misbehaves.
-
-## Git mirror ≠ deploys
-
-Two unrelated git repos:
-
-- **This repo** (app code): deploys via `wrangler deploy` on push. Code path only.
-- **Mirror repo** (wiki content): written by the app, never deployed from.
+Secrets: `CF_AIG_TOKEN`, `MATTER_API_TOKEN`, `LULU_CLIENT_KEY`, `LULU_CLIENT_SECRET`. Vars: `OPENAI_BASE_URL`, `OPENAI_MODEL`, `LULU_BASE_URL`, `BOOK_POD_PACKAGE_ID`, `MAX_SYNTHESES_PER_RUN`. Bindings: `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `SYNTHESIS`, `BOOK`. Browser Rendering requires the Workers Paid plan.
 
 ## Milestones
 
-1. **Spine**: React Router app on Workers + R2 read path (markdown → SSR HTML → edge cache) + input box → `SynthesisWorkflow` end-to-end (one page written, toast fires). Write seam with history/ copies. Access on writes.
-2. **Graph & links**: index.json regeneration, graph view, red links, dedup/alias resolution, lazy streamed generation on target navigation.
-3. **Ingestion**: Matter polling workflow, source pages, highlight-quote popup.
-4. **Upkeep**: lint workflow, digest email, sitemap/meta polish.
-5. **Deferred**: GitHub mirror, WebSocket toast, sandbox maintenance path, per-page visibility flags.
-
-## Open design problems (not blockers)
-
-- **Dedup/alias resolution** (DESIGN.md calls it the hard problem): lean — aliases in page frontmatter, flattened alias→slug map in index.json, every link the synthesizer writes resolves against it via a cheap-model pass. Needs its own design pass before milestone 2.
-- **Red-link generation cost dial**: generation is lazy by default; provider-side project limits remain the billing backstop.
-- DESIGN.md's open trio: digest cadence, Matter auto-ingest vs confirm, highlight popup actions.
+1. **Sync + graph**: `MatterSyncWorkflow`, source pages, embeddings, `index.json` with sources and `near`, graph view with the state vocabulary. No LLM. Verify: run sync, see the library as correctly labeled nodes.
+2. **Synthesis**: `SynthesisWorkflow` on archived sources, citations, topic pages. Remove input-box and red-link code. Verify: archive an item in Matter → next sync → a topic page cites it.
+3. **Book PDFs**: `BookWorkflow` through interior and cover PDF download. Verify: open PDFs, check size and bleed against Lulu's template.
+4. **Lulu order**: cover dimensions, quote, sandbox order, status, email. Then production.
+5. **Upkeep**: lint, digest, suggestions with save-to-Matter.

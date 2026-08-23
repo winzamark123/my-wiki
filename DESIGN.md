@@ -1,94 +1,102 @@
-# Personal Wiki — Design Spec
+# Reading Wiki — Design Spec
 
-Inspired by [Karpathy's llm-wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): the wiki is a persistent, compounding artifact. Knowledge is synthesized once at creation time, not re-derived at query time. The LLM does all the bookkeeping; the human curates attention and asks questions.
+A graph of everything I read in [Matter](https://getmatter.com), synthesized into topic pages by an LLM, and printable as a physical book. Inspired by [Karpathy's llm-wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): knowledge is synthesized once at ingestion time, not re-derived at query time. The LLM does the bookkeeping; I only read.
 
-Private, single-user, tailored to what *I* want to read and explore. Intersection topics ("home server × computer use") are first-class — this is not an encyclopedia, it's a map of my curiosity.
+Private, single-user. Matter is the only input. There is no input box, no chat, and no manual page editing.
 
 ## Core principles
 
-- **Frontload everything.** Links, citations, images, and cross-references are built at ingestion/creation time. Reading requires no LLM in the loop.
-- **Attention-gated growth.** Nothing enters the wiki because it was saved or collected — only because I highlighted it, dropped it in the input box, or opened a page. Prevents the read-it-later graveyard from leaking into the wiki.
-- **Zero human writing.** All content is AI-generated, backed by sources, web search, or my inputs. My fingerprint is what I paid attention to and what I said — captured as provenance, never as authored prose.
-- **The page is the response.** There is no chatbot. Inputs materialize as page content; the artifact is the reply.
+- **Matter is the only input.** Nothing enters the wiki except through my Matter library. Saving to the queue adds a node; archiving triggers synthesis. There is no other way in.
+- **Archive is the gate.** Only finished reading is synthesized. Queued and in-progress items are visible in the graph as the frontier, but the LLM never writes about them.
+- **Frontload everything.** Topic pages, citations, and graph edges are built when an item is archived. Reading the wiki requires no LLM in the loop.
+- **Zero human writing.** All prose is LLM-generated from sources. My fingerprint is what I chose to read and finish.
+- **The book is the output.** The wiki exists so that, at some point, it can be laid out and printed. Everything in the data model serves that.
 
-## Architecture (Karpathy's three layers)
+## States
 
-1. **Sources** — immutable ingested content (articles, my inputs, images). Rendered as readable *source pages*. My highlight-triggered inputs are persisted here too: they are the only place I exist in the system, and pages cite them as provenance ("from your note on 2026-07-09").
-2. **Wiki** — synthesized markdown articles. Mutable, densely internally-linked, written in blog/article voice (narrative, readable — not terse notes). One representation serves both human reading and LLM context.
-3. **Schema** — a config document defining page conventions, linking rules, voice, and the ingest/query/lint workflows. Turns the LLM into a disciplined wiki maintainer.
+Matter has an inbox (a feed of writers and newsletters I follow), a queue (things I saved myself), and an archive. The wiki ignores the inbox; swiping an item to the queue in Matter is the act that adds it to the wiki.
 
-Everything is markdown. **R2 holds the live copy** (what the app serves); **git is the async mirror** (history, revert, changelog, and a cloneable snapshot for offline/heavy maintenance). Writes go to R2 first — visible in seconds, no deploy — and commit to GitHub in the background.
+| Wiki state | Matter condition | Shown as |
+| --- | --- | --- |
+| `queued` | in queue, `reading_progress = 0` | hollow dotted circle |
+| `reading` | in queue, `reading_progress > 0` | ring with an arc covering the progress |
+| `archived` | in archive | solid circle; progress is ignored |
 
-### Serving model
+Archive means finished regardless of progress; many items are archived without scrolling to the end.
 
-- **Content path**: input → Worker synthesizes → writes `.md` to R2 → purges page cache → toast. Git commit trails asynchronously.
-- **Read path**: request → cached HTML if present → else Worker reads markdown from R2, renders to HTML, caches at the edge. Reading feels static; no LLM, no build step.
-- **Code path**: template/CSS/Worker changes deploy via git push. Content never waits on a deploy.
-- Graph/index JSON regenerates on write, stored in R2.
+## Architecture (three layers)
 
-### How the LLM accesses content
-
-No sandbox, no vector DB. The agent is a tool-use loop inside the Worker with tools backed by R2: `read_index()`, `read_page(slug)`, `write_page(slug, content)`. Traversal mirrors human navigation: read `index.md` (the whole map fits in context at personal-wiki scale), open relevant pages, follow their internal links outward. The frontloaded `[[wiki-links]]` are the retrieval graph for the LLM, not just navigation for the reader.
-
-Synthesis jobs that can touch several pages run as Workflows — the input-box request enqueues and returns instantly; the job fires the toast when done. Red-link pages use a narrower live stream because the user is waiting on one specific page: generation streams into the page, survives refresh through a Durable Object, then writes through the same R2 seam. Lint remains a Workflow. For heavy one-off maintenance, clone the git mirror and run an agent against the filesystem locally.
+1. **Sources** — one page per Matter item: metadata, state, progress, and the article body as Matter delivers it. Immutable apart from state changes. Private (copies of other people's writing).
+2. **Wiki** — synthesized topic pages in markdown. Mutable, densely linked, blog-style prose. Every claim cites a source. One representation serves the reader, the LLM, and the book.
+3. **Schema** — the conventions the LLM follows (page format, linking, citation, voice) and the data shapes in ARCHITECTURE.md.
 
 ## Surfaces
 
-### Wiki pages
-Blog-style articles with embedded images (from ingested sources) and internal-only links. Claims carry citations linking to source pages, anchored to the relevant passage where possible.
+### Graph (home)
+Force-directed graph of every source and topic page.
 
-### Source pages
-Ingested external content rendered readably. Immutable. Clearly visually distinct from wiki pages (someone else's voice vs. synthesized).
+- **Sources** are circles, drawn by state as above. Radius scales with word count. Favorites carry a small amber dot.
+- **Topic pages** are diamonds in the accent color.
+- **Citation edges** (solid) run from archived sources to the topic pages that cite them, and between topic pages that link each other.
+- **Similarity edges** (dotted) attach queued and reading items to their nearest topic pages, computed from embeddings. They disappear when the item is archived and real citations replace them.
+- Filters: by state, by favorite, by site, by word count. Each is a predicate on the index.
 
-### Graph / index page
-The navigation home; the human-facing render of `index.md`.
-- **Graph view**: nodes and links, Obsidian-style. Red links render as hollow/distinct nodes (the curiosity frontier). Orphans are visibly disconnected. Doubles as a health dashboard.
-- **List view**: categorized table of contents, one-line summary per page.
+A list view shows the same data as a categorized table of contents.
 
-## The input box
+### Topic page
+Blog-style article with inline citations to source pages and `[[wiki-links]]` to other topic pages. Links to pages that don't exist yet render as plain text; there is no red-link generation.
 
-A persistent input at the bottom-right of every page. **Not a chat.** Fire-and-forget: whatever is dropped in gets synthesized in the background.
+### Source page
+The Matter item rendered readably: title, author, site, state, progress, word count, and the article body. Visually distinct from topic pages. Never public.
 
-- Accepts **text** (instructions or raw information), **links** (fetched and ingested as source pages — dropping a link here is the attention signal), **images** (stored locally, embedded, captioned).
-- The current page is the *default context*, but the synthesizer decides placement: weave into this page, update another page, or create a new page. Never blind-append — pages are synthesis, not journals.
-- On completion, a **toast** reports what happened: "Synthesized into *X* · created *Y*" — each a link to the page.
-- A new topic is just an empty page + the same input box. No special creation flow.
-- One thin non-page channel: an ephemeral status line above the input for things that can't be content ("couldn't fetch that link", "this contradicts *Proxmox* — which is right?"). Not a transcript.
-
-### Highlight interaction
-Highlighting text (on wiki *or* source pages) shows a small popup above the selection (Codex-chat style) with quick options. Primary action: **quote into the input box** — the next input applies to that passage ("expand this", "this is outdated", "make this its own page"). Same gesture on both surfaces; the layer determines meaning (source highlight = ingestion signal, wiki highlight = edit instruction).
+### Book builder
+Select sources (all archived, by topic, or by date range), preview the chapter plan, see a price quote, and order. Details under Book.
 
 ## Ingestion
 
-- **Matter (v1)**: poll Matter's highlights API (`api.getmatter.app/api/v11/library_items/highlights_feed`, QR-code auth — same API their Obsidian plugin uses). Highlighted articles become ingestion candidates; we fetch the full article ourselves. The wiki learns both the source and which passages I cared about. No extension needed.
-- **Direct**: links/files/images dropped into the input box.
-- Saving to Matter ≠ ingestion. Highlights are the gate.
-- An ingest touches many pages: summary/source page, updates to relevant wiki pages, index update, log entry.
+A daily job pulls every queue and archive item from the Matter API using `updated_since`, so each run fetches only what changed.
 
-## Red links & generation
+- New items get a source page with metadata and state. The article body (`?include=markdown`) is fetched once.
+- State and progress updates rewrite the source frontmatter; the graph reflects them on the next render.
+- Items that moved to `archived` and have not been synthesized are handed to synthesis.
+- Each new item is embedded (title + excerpt) for similarity edges. Topic pages are embedded when written.
+- Highlights and annotations are not fetched. Tags are not used.
 
-Links are internal-only and written liberally — including to pages that don't exist yet. A red link is not an error; the set of red links is the reading queue.
+Matter hosts article images on its own CDN; the wiki and the book load images by URL and store no copies.
 
-- **Lazy and attention-gated**: opening a missing red-link target starts generation and streams the article into that page. Its own red links stay red until each target is opened, so growth follows reading and infinite generation is structurally impossible.
-- **Cap ~10–15 links per page** — bounds cost and forces linking what matters.
-- **Dedup is the hard problem**: every link resolves against the index with aliases ("computer use" = "CUA" = "computer-use agents") before a new red link is created. Sloppy dedup fragments the graph into near-duplicates.
-- **Context-rich births**: a red-link page is generated from the paragraph(s) that reference it + related wiki pages + web search — never from the title alone. Links accumulated from multiple pages give the generation multiple contexts.
+## Synthesis
 
-## Maintenance
+Runs once per archived source. The LLM reads the index and the source, opens related topic pages, and decides placement: weave into an existing page, update several, or create a new one. Never blind-append. Pages are synthesis, not journals.
 
-- **Auto-commit + changelog.** Changes apply immediately (git for revert). No approval flow.
-- **Digest email** (daily/weekly): pages created/updated, contradictions found, unexplored red links. Doubles as the pull-back-into-reading mechanism.
-- **Lint** (periodic): self-heals mechanical issues (missing backlinks, index drift); surfaces judgment calls (contradictions, stale claims superseded by newer sources) to me. When a new page lands, older pages get re-linked into it — frontloading is ingestion-time *plus* periodic re-linking.
-- **log.md**: append-only record of ingests, syntheses, and lint passes.
+- Topic pages link liberally (10–15 `[[wiki-links]]` max per page) and resolve every link against the alias map before creating a new target. Near-duplicate topics are the failure mode to avoid.
+- Every source-derived claim cites `[[source:<id>]]`. Citations are the graph's solid edges and the book's chapter membership.
+- The source is marked `synthesized_at` and the run is appended to `log.md`.
+
+## Book
+
+A book is a selection of archived sources laid out as chapters.
+
+1. **Plan** — the LLM groups the selected sources into chapters keyed by topic page, orders the articles within each, and writes nothing new: the topic page is the chapter introduction.
+2. **Interior** — articles are reflowed into print HTML (trim size, margins, running heads, page numbers, table of contents, per-article title block with author, site, and date archived) and rendered to `interior.pdf`.
+3. **Cover** — sized from the interior page count using the printer's spine calculation; typographic by default, optionally with a generated image. Rendered to `cover.pdf`.
+4. **Order** — price quote, confirmation, print job via Lulu's API, status until shipped. Both PDFs stay downloadable for any other printer.
+
+Reprinting articles in a single personal copy is fine; the book is never sold or shared.
+
+## Later
+
+- **Lint**: periodic pass that fixes mechanical drift (missing backlinks, stale index) and surfaces contradictions between sources.
+- **Digest email**: what was synthesized, what's queued, what's unexplored.
+- **Suggestions**: web search around weak or growing topics; suggested reads are emailed and can be saved straight into the Matter queue via `POST /items`, where they enter the normal flow.
 
 ## Scope
 
-**v1**: wiki pages, source pages, graph/index, input box + highlight-quote, Matter ingestion, red-link generation, lint, digest email.
+**v1**: Matter sync, source pages, graph with states and similarity edges, synthesis of archived items, topic pages, book builder through printed copy.
 
-**v2+**: own reader extension (replace Matter entirely — read, highlight, and build in one platform), generated diagrams, public visibility flags per page.
+**Later**: lint, digest, suggestions, per-page public visibility.
 
 ## Open questions
 
-- Digest cadence: daily or weekly?
-- Matter highlights: auto-ingest anything highlighted, or require explicit confirmation per article?
-- Highlight popup: which quick actions beyond "quote into input"? (candidates: expand, make-new-page)
+- Trim size and binding for the book (default: 6×9, hardcover, black-and-white interior).
+- Cover: typographic only, or a generated image.
+- Book unit: everything since the last book, or a hand-picked set of topics.

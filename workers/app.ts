@@ -1,7 +1,7 @@
 import { createRequestHandler } from "react-router";
 
-export { ResumableStreamDO } from "./resumable-stream";
 export { SynthesisWorkflow } from "./synthesis";
+export { MatterSyncWorkflow } from "./matter-sync";
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
