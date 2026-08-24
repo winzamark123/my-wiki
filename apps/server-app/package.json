@@ -1,0 +1,28 @@
+{
+  "name": "@my-wiki/server-app",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./sources": "./src/sources.ts",
+    "./wiki": "./src/wiki.ts"
+  },
+  "scripts": {
+    "build": "wrangler deploy -c wrangler.jsonc --dry-run --outdir dist",
+    "dev": "wrangler dev -c wrangler.jsonc --port 8787 --persist-to ../../.wrangler/state",
+    "typecheck": "wrangler types -c wrangler.jsonc && tsc --noEmit",
+    "test": "vitest run",
+    "deploy": "wrangler deploy -c wrangler.jsonc --minify",
+    "cf-typegen": "wrangler types -c wrangler.jsonc",
+    "postinstall": "wrangler types -c wrangler.jsonc"
+  },
+  "dependencies": {
+    "hono": "^4.13.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.110.0"
+  }
+}

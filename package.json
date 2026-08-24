@@ -7,7 +7,8 @@
     "dev": "turbo dev",
     "typecheck": "turbo typecheck",
     "test": "turbo test",
-    "deploy:app": "pnpm --filter @my-wiki/app deploy"
+    "deploy:app": "pnpm --filter @my-wiki/app deploy",
+    "deploy:server-app": "pnpm --filter @my-wiki/server-app deploy"
   },
   "devDependencies": {
     "turbo": "^2.10.0"
