@@ -2,9 +2,9 @@
 // see ARCHITECTURE.md → Links
 import { z } from "zod";
 
-import { getEmbeddingStore, nearestSources, type EmbeddingStore } from "./embeddings.server";
+import { getEmbeddingStore, nearestSources, type EmbeddingStore } from "./embeddings";
 import { headText } from "./sources";
-import { getSource } from "./sources.server";
+import { getSource } from "./source-store";
 import type { Link } from "./wiki";
 
 const RERANKER = "@cf/baai/bge-reranker-base";

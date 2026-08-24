@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
 
-import { linkSources } from "./links.server";
-import { getSource } from "./sources.server";
+import { linkSources } from "./links";
+import { getSource } from "./source-store";
 import { apiIndexSchema } from "./wiki";
-import { getIndex, regenerateIndex } from "./wiki.server";
+import { getIndex, regenerateIndex } from "./wiki-index";
 
 const syncQuerySchema = z.object({ full: z.literal("1").optional() });
 

@@ -1,10 +1,10 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 
-import { createMatterClient, type MatterItem } from "./matter.server";
+import { createMatterClient, type MatterItem } from "./matter";
 import { sourceMetaFromItem } from "./sources";
-import { getSource, getSyncState, writeSource, writeSyncState } from "./sources.server";
-import { linkSources } from "./links.server";
-import { appendLog, regenerateIndex } from "./wiki.server";
+import { getSource, getSyncState, writeSource, writeSyncState } from "./source-store";
+import { linkSources } from "./links";
+import { appendLog, regenerateIndex } from "./wiki-index";
 
 export interface MatterSyncParams {
   // ignore the cursor and walk the whole library

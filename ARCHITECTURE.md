@@ -151,7 +151,7 @@ Links are computed at sync time, per source, in three stages, all through the `A
 2. **Rerank.** `bge-reranker-base` reads the source and each candidate together (the first ~1,500 characters of each) and scores them 0–1. Keep up to 4 with score ≥ 0.2.
 3. **Verdict and label.** Llama 3.3 70B gets the same heads and returns JSON per candidate: related or not, plus a label of at most 8 words saying what they share. Accepted pairs get the label; rejected pairs are stored with `null`.
 
-A source is (re)linked when its embedded text hash changes, which happens once: when the body is first fetched. Every pair is judged once, from whichever side saw it first, so the LLM cost is per new article, not per sync. The graph draws `index.json.links` and shows the label on hover; the source page lists them under Related. Tunables live at the top of `apps/server-app/src/links.server.ts`.
+A source is (re)linked when its embedded text hash changes, which happens once: when the body is first fetched. Every pair is judged once, from whichever side saw it first, so the LLM cost is per new article, not per sync. The graph draws `index.json.links` and shows the label on hover; the source page lists them under Related. Tunables live at the top of `apps/server-app/src/links.ts`.
 
 ## Workflows
 

@@ -1,7 +1,7 @@
-// source pages: one per Matter item. shared pure helpers; storage lives in sources.server
+// source pages: one per Matter item. shared pure helpers; storage lives in source-store
 import { z } from "zod";
 
-import type { MatterItem } from "./matter.server";
+import type { MatterItem } from "./matter";
 
 export const sourceStates = ["queued", "reading", "archived"] as const;
 

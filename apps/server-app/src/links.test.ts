@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { pairKey, pendingSources, relatedLinks } from "./links.server";
+import { pairKey, pendingSources, relatedLinks } from "./links";
 
 describe("pairKey", () => {
   it("is order independent", () => {

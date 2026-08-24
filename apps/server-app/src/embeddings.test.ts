@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { nearestSources } from "./embeddings.server";
+import { nearestSources } from "./embeddings";
 
 const unit = (x: number, y: number) => {
   const n = Math.hypot(x, y);

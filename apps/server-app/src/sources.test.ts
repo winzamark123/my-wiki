@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MatterItem } from "./matter.server";
+import type { MatterItem } from "./matter";
 import { cleanBody, deriveState, parseFrontmatter, serializeSource, sourceFrontmatterSchema, sourceMetaFromItem } from "./sources";
 
 const item: MatterItem = {

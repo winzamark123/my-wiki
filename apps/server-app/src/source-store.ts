@@ -1,7 +1,7 @@
 // R2 access for source pages (sources/<matterId>.md) and the sync cursor
 import { z } from "zod";
 
-import { readObjects } from "./r2.server";
+import { readObjects } from "./r2";
 import { embeddingText, parseFrontmatter, serializeSource, sourceFrontmatterSchema, type SourceMeta } from "./sources";
 
 // frontmatter fits comfortably in this many bytes (title, url, 500-char excerpt, timestamps)

@@ -1,8 +1,8 @@
 // content store access. R2 layout — see ARCHITECTURE.md
 
-import { refreshEmbeddings } from "./embeddings.server";
-import { getLinks, pendingSources, relatedLinks } from "./links.server";
-import { listEmbeddingTexts, listSourceMeta } from "./sources.server";
+import { refreshEmbeddings } from "./embeddings";
+import { getLinks, pendingSources, relatedLinks } from "./links";
+import { listEmbeddingTexts, listSourceMeta } from "./source-store";
 import { wikiIndexSchema } from "./wiki";
 
 export const CACHE_HEADERS = { "Cache-Control": "public, max-age=0, s-maxage=60" };

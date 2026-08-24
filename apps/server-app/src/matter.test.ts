@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createMatterClient, parseLenientJson } from "./matter.server";
+import { createMatterClient, parseLenientJson } from "./matter";
 
 const baseItem = {
   id: "itm_1",
