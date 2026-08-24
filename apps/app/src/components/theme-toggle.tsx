@@ -1,4 +1,4 @@
-// the icon follows the html.dark class, so no state is needed and the server render matches
+// the icon follows the html.dark class, so no component state is needed
 export function ThemeToggle({ className }: { className: string }) {
   function toggle() {
     const dark = document.documentElement.classList.toggle("dark");

@@ -5,7 +5,7 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 ## Stack at a glance
 
 - **Server** (`apps/server-app`): one Worker that owns every binding (R2, Workers AI, Workflows, cron) and serves an HTTP JSON API. Everything that talks to Matter or R2 lives here.
-- **App** (`apps/app`): React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`. Reads from the server API only; no data bindings of its own.
+- **App** (`apps/app`): React 19 + Vite + TanStack Router/Query + shadcn/ui + Tailwind, deployed as static Worker assets. The browser reads the server API directly.
 - **API contract**: Zod schemas exported by `server-app` and parsed by `app`. The runtime contract is HTTP JSON, so external clients do not depend on workspace code.
 - **Content store**: R2 (markdown, index, embeddings, book files)
 - **Jobs**: Cloudflare Workflows (Matter sync, book build; later digest and suggestions)
@@ -13,8 +13,8 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 - **PDF**: Browser Rendering (`@cloudflare/puppeteer`, `page.pdf()`) through the `BROWSER` binding
 - **Printing**: Lulu Print API (sandbox, then production)
 - **Graph UI**: d3-force layout, React SVG nodes
-- **Read caching**: Workers Cache driven by `Cache-Control`
-- **Auth**: none until the book flow works end to end (M5); then Cloudflare Access on the web app's private paths and a bearer token between web and server
+- **Read caching**: Workers Cache for the public index plus TanStack Query in the browser
+- **Auth**: none until the book flow works end to end (M5); the browser-safe production design is deferred
 - **Email**: Cloudflare Email Service (later: digest, suggestions, order status)
 
 ```
@@ -23,8 +23,9 @@ Matter API ──daily──▶ MatterSyncWorkflow ──writes──▶ R2 sour
                  │  GET /api/index · GET /api/sources/:id · POST /api/sync · /api/book/*   │
                  └───────────────────────────▲──────────────────────────┘
                                              │ HTTP JSON
-Browser ──▶ app (apps/app): SSR graph / source / book pages ─┘
-Portfolio site ──▶ GET /api/index (public, read-only) ───────┘
+Browser ──▶ app (apps/app): static graph / source / book UI
+        └──────────────▶ server HTTP JSON API ──────────────┘
+Portfolio site ────────▶ GET /api/index (public, read-only) ─┘
 
 /book ──▶ BookWorkflow (server): plan → interior.html → Browser Rendering → interior.pdf
                                  → Lulu cover dims → cover.pdf → quote → confirm → print job → status
@@ -36,7 +37,7 @@ The repo is a pnpm workspace with two Workers:
 
 ```
 apps/server-app/  Worker my-wiki-server-app: R2, AI, Workflows, cron, HTTP API. All Matter and R2 access.
-apps/app/         Worker my-wiki-app: the React Router UI. Loaders call the server API over HTTP.
+apps/app/         Worker my-wiki-app: static Vite SPA. TanStack Router loaders call the server API over HTTP.
 ```
 
 The server exports the Zod schemas for its API responses. The app imports those schemas to validate responses, but all runtime communication is HTTP. Add `packages/db` only if a real D1 or PostgreSQL schema and migration tooling arrive; R2 access remains private to `server-app`.
@@ -57,15 +58,15 @@ The rule: if code reads Matter, reads or writes R2, or calls a model, it is in t
 | `POST /api/reindex` | dev only: rebuild index, embeddings, links |
 | `/api/book/*` | added in M3 |
 
-No auth until M5: the whole thing runs in dev until the book flow works end to end. The server can still be deployed on its own before that: with `workers_dev` off and no custom domain, no route is reachable, but the cron fires and fills R2. Hono defines the API routes. CORS is added before the first browser client calls the public index directly.
+No auth until M5: the whole thing runs in dev until the book flow works end to end. The server can still be deployed on its own before that: with `workers_dev` off and no custom domain, no route is reachable, but the cron fires and fills R2. Hono defines the API routes and allows requests from the configured `FRONTEND_URL`.
 
-The app reads `SERVER_URL` from its vars (`http://localhost:8787` in dev). A service binding from app to server is possible later for latency, but HTTP is the only contract so every client is treated the same.
+The app reads `VITE_API_URL` at build time (`http://localhost:8787` by default in dev). HTTP is the only contract so every client is treated the same.
 
 Local development runs both Workers. Only `server-app` has a local R2 store.
 
 ### Multi-user (milestone M7)
 
-- Identity: Cloudflare Access with One-time PIN on the web app, allow rule widened from one email to a list. The web app forwards the `Cf-Access-Jwt-Assertion` header; the server verifies the JWT against the team's public keys and uses the email as the user id.
+- Identity: decided in M5 before either app is public. The server must receive and verify browser credentials directly; the static app cannot hold or forward a shared secret.
 - Matter token: `PUT /api/me/matter-token`, validated with one `GET /items?limit=1` call, then stored AES-GCM encrypted (key in the `TOKEN_KEY` secret) in `users/<id>/settings.json`. The `MATTER_API_TOKEN` Worker secret goes away.
 - Data: every R2 key moves under `users/<id>/`; the flat layout below is the single-user form. `GET /api/index` becomes `GET /api/users/:id/index`.
 - Cron: the scheduled handler lists users and starts one `MatterSyncWorkflow` per user with `{ userId }`. Matter rate limits are per token, so user syncs do not compete.
@@ -175,40 +176,38 @@ First run has no cursor and backfills everything (47 archived, 86 queued today).
 
 ## Writes
 
-Sources are written by the sync job only (`writeSource`); `index.json`, `embeddings.json`, and `links.json` are updated once per sync. Only the server touches R2. Source pages are served with `no-store`; the graph is edge-cached for 60 s, so a sync is visible within a minute. Cache purge on write is a later addition.
+Sources are written by the sync job only (`writeSource`); `index.json`, `embeddings.json`, and `links.json` are updated once per sync. Only the server touches R2. The server caches the public index for 60 seconds and sends source bodies with `private, no-store`. TanStack Query keeps the index fresh for 60 seconds and each source for five minutes within a browser session. Cache purge on write is a later addition.
 
 ## App
 
-React Router v8 framework mode on Workers (see git history for the Astro/SPA comparison). Routes:
+The app is a client-rendered Vite SPA with TanStack Router and TanStack Query, following the same frontend structure as Beryli. Routes:
 
-- `/` graph + list. Loader calls `GET /api/index`; the client runs d3-force and draws SVG nodes per the state vocabulary in DESIGN.md.
-- `/source/:id` source page with its Related list (private). Loader calls `GET /api/sources/:id` and renders the markdown with `marked`.
+- `/` graph + list. The route preloads `GET /api/index`; the client runs d3-force and draws SVG nodes per the state vocabulary in DESIGN.md.
+- `/source/:id` source page with its Related list. The route preloads `GET /api/sources/:id` and renders the markdown with `marked` in the browser.
 - `/book` builder (M3), backed by the server's `/api/book/*`.
 
-The loaders call `server-app` over HTTP and validate each JSON response against the server's Zod schemas. The app has no R2, AI, Workflow, cron, or Matter bindings.
+TanStack Query owns request deduplication and the in-memory data cache. Every JSON response is validated against the server's Zod schemas. The app is deployed as static assets and has no server entry point, secrets, or Cloudflare bindings.
 
 Removed from earlier designs: input box, red-link generation, LLM-written topic pages, `/wiki/:slug`.
 
 ## Auth & visibility
 
-Nothing is public before M5; both Workers keep `workers_dev` off and have no custom domain. When the site goes live: Cloudflare Access gates the web app's `/book*` and `/source/*` paths, using the **One-time PIN** login method (email code, no Google or other SSO; free on the Zero Trust plan). Allow rule: my email only. Access requires the app to be on a custom domain in the account. The graph is publicly readable with no auth; it shows titles and sites only, and its nodes link to private source pages.
-
-The server is not behind Access. `GET /api/index` is public; every other route checks an `API_TOKEN` bearer that the web app sends server side. Browsers never call the private server routes directly.
+Nothing is public before M5; both Workers keep `workers_dev` off and have no custom domain. Authentication is intentionally deferred until the wiki-to-book flow works end to end. Because the app is a static SPA, it cannot safely store a shared API bearer token. M5 must choose a browser-safe design for both domains before exposing source bodies or write routes. The intended public surface remains the graph index, which contains titles and sites but not article bodies.
 
 ## Secrets and bindings
 
-Server secrets: `MATTER_API_TOKEN` (until M7), `LULU_CLIENT_KEY`, `LULU_CLIENT_SECRET`, and from M5 `API_TOKEN`; vars `LULU_BASE_URL`, `BOOK_POD_PACKAGE_ID`; bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. Browser Rendering requires the Workers Paid plan.
+Server secrets: `MATTER_API_TOKEN` (until M7), `LULU_CLIENT_KEY`, and `LULU_CLIENT_SECRET`; vars `FRONTEND_URL`, `LULU_BASE_URL`, and `BOOK_POD_PACKAGE_ID`; bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. Browser Rendering requires the Workers Paid plan.
 
-App vars: `SERVER_URL`; from M5 the `API_TOKEN` secret. No data bindings.
+App build variable: `VITE_API_URL`. The app has no runtime secrets or data bindings.
 
 ## Milestones
 
 Tracked in Linear (project my-wiki). Each milestone's issues are ordered by blocking relations; an issue that blocks nothing can run in parallel.
 
 1. **Sync + graph**: `MatterSyncWorkflow`, source pages, embeddings, `index.json` with labeled links, graph view with the state vocabulary. Verify: run sync, see the library as correctly labeled nodes. Done.
-2. **Server + client split**: workspace layout, `apps/server-app` with the API and all bindings, `apps/app` reading over HTTP, CORS for external clients. Verify: both Workers run locally, the graph and source pages render from the API, and the app has no data bindings.
+2. **Server + client split**: workspace layout, `apps/server-app` with the API and all bindings, and `apps/app` as a Vite SPA reading over HTTP. Verify: both apps run locally, the graph and source pages render from the API, and the app has no data bindings.
 3. **Book PDFs**: `BookWorkflow` through interior and cover PDF download, all in dev. Verify: open PDFs, check size and bleed against Lulu's template.
 4. **Lulu order**: cover dimensions, quote, sandbox order, status, email. Then a production order from dev and a physical proof.
-5. **Access + deploy**: only after the wiki-to-book flow works end to end. Custom domain for both Workers, Access with One-time PIN on web, `API_TOKEN`, first production sync.
+5. **Access + deploy**: only after the wiki-to-book flow works end to end. Choose browser-safe authentication, attach custom domains to both apps, and run the first production sync.
 6. **Upkeep**: digest, suggestions with save-to-Matter.
 7. **Multi-user**: identity from the Access JWT, per-user Matter token, per-user data prefix and cron fan-out.

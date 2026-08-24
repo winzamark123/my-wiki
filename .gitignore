@@ -4,8 +4,7 @@ node_modules/
 .turbo/
 *.tsbuildinfo
 
-# React Router
-.react-router/
+# Build
 build/
 dist/
 

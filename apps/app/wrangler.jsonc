@@ -1,23 +1,15 @@
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "my-wiki-app",
   "account_id": "e62b5d31403985d71d0a4faae9948728",
   "compatibility_date": "2026-07-11",
-  "main": "./workers/app.ts",
-  // keep the UI unreachable until a custom domain is protected in M5
   "workers_dev": false,
   "preview_urls": false,
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
   "observability": {
     "enabled": true
-  },
-  "upload_source_maps": true,
-  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
-  "cache": { "enabled": true },
-  "vars": {
-    "SERVER_URL": "http://localhost:8787"
   }
 }

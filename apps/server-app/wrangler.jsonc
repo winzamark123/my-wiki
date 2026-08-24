@@ -16,8 +16,10 @@
   },
   "upload_source_maps": true,
   "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  "cache": { "enabled": true },
   "vars": {
-    "ENVIRONMENT": "development"
+    "ENVIRONMENT": "development",
+    "FRONTEND_URL": "http://localhost:5173"
   },
   "ai": { "binding": "AI" },
   "r2_buckets": [

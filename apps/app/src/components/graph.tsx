@@ -9,8 +9,8 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3-force";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
 
 import type { IndexSource, Link as WikiLink } from "@my-wiki/server-app/wiki";
 
@@ -119,7 +119,6 @@ function endpoints(edge: GraphEdge) {
 
 export function Graph({ sources, links }: { sources: IndexSource[]; links: WikiLink[] }) {
   const graph = useMemo(() => buildGraph({ sources, links }), [sources, links]);
-  // layout runs on the client only; the server renders an empty canvas that hydrates into place
   const [positioned, setPositioned] = useState<ReturnType<typeof layout> | null>(null);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<GraphEdge | null>(null);
@@ -152,7 +151,7 @@ export function Graph({ sources, links }: { sources: IndexSource[]; links: WikiL
           );
         })}
         {positioned?.nodes.map((node) => (
-          <Link key={node.id} to={`/source/${node.id}`}>
+          <Link key={node.id} to="/source/$id" params={{ id: node.id }}>
             <g
               transform={`translate(${node.x},${node.y})`}
               className="cursor-pointer"

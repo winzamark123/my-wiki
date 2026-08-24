@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { z } from "zod";
 
 import { linkSources } from "./links";
@@ -10,6 +11,7 @@ const syncQuerySchema = z.object({ full: z.literal("1").optional() });
 
 export const app = new Hono<{ Bindings: Env }>()
   .get("/health", (c) => c.json({ status: "ok" }))
+  .use("/api/*", (c, next) => cors({ origin: c.env.FRONTEND_URL })(c, next))
   .get("/api/index", async (c) => {
     const { sources, links } = await getIndex(c.env.WIKI);
     const index = apiIndexSchema.parse({

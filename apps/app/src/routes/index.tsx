@@ -1,24 +1,17 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { sourceStates } from "@my-wiki/server-app/sources";
 import type { IndexSource } from "@my-wiki/server-app/wiki";
-import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useMemo, useState } from "react";
 
-import type { Route } from "./+types/home";
-import { Graph, SourceGlyph } from "~/components/graph";
-import { ThemeToggle } from "~/components/theme-toggle";
-import { getIndex } from "~/lib/api.server";
+import { Graph, SourceGlyph } from "@/components/graph";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { wikiQueries } from "@/api/wiki";
 
-export function meta() {
-  return [{ title: "Wiki" }];
-}
-
-export function headers() {
-  return { "Cache-Control": "public, max-age=0, s-maxage=60" };
-}
-
-export async function loader() {
-  return getIndex();
-}
+export const Route = createFileRoute("/")({
+  loader: ({ context }) => context.queryClient.ensureQueryData(wikiQueries.index),
+  component: Home,
+});
 
 type State = IndexSource["state"];
 
@@ -27,41 +20,46 @@ const chipClass = (active: boolean) =>
 
 function sourceFacts(source: Pick<IndexSource, "site" | "state" | "progress">) {
   return [source.site, source.state === "reading" ? `${Math.round(source.progress * 100)}%` : null]
-    .filter((f): f is string => Boolean(f))
+    .filter((fact): fact is string => Boolean(fact))
     .join(" · ");
 }
 
-export default function Home({ loaderData }: Route.ComponentProps) {
-  const { sources, links } = loaderData;
+function Home() {
+  const { data } = useSuspenseQuery(wikiQueries.index);
+  const { sources, links } = data;
   const [view, setView] = useState<"graph" | "list">("graph");
   const [states, setStates] = useState<Set<State>>(new Set(sourceStates));
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [site, setSite] = useState("");
   const [minWords, setMinWords] = useState(0);
 
+  useEffect(() => {
+    document.title = "Wiki";
+  }, []);
+
   const counts = useMemo(
-    () => Object.fromEntries(sourceStates.map((state) => [state, sources.filter((s) => s.state === state).length])),
+    () => Object.fromEntries(sourceStates.map((state) => [state, sources.filter((source) => source.state === state).length])),
     [sources],
   );
   const sites = useMemo(
-    () => [...new Set(sources.map((s) => s.site).filter((s): s is string => Boolean(s)))].sort(),
+    () => [...new Set(sources.map((source) => source.site).filter((value): value is string => Boolean(value)))].sort(),
     [sources],
   );
   const visible = useMemo(
     () =>
       sources.filter(
-        (s) =>
-          states.has(s.state) &&
-          (!favoritesOnly || s.favorite) &&
-          (!site || s.site === site) &&
-          (s.word_count ?? 0) >= minWords,
+        (source) =>
+          states.has(source.state) &&
+          (!favoritesOnly || source.favorite) &&
+          (!site || source.site === site) &&
+          (source.word_count ?? 0) >= minWords,
       ),
     [sources, states, favoritesOnly, site, minWords],
   );
 
   function toggleState(state: State) {
-    setStates((prev) => {
-      const next = new Set(prev);
+    setStates((previous) => {
+      const next = new Set(previous);
       if (next.has(state)) next.delete(state);
       else next.add(state);
       return next;
@@ -73,9 +71,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
       <header className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="mr-auto text-2xl font-semibold">Wiki</h1>
         <div className="flex gap-2">
-          {(["graph", "list"] as const).map((v) => (
-            <button key={v} type="button" className={chipClass(view === v)} onClick={() => setView(v)}>
-              {v}
+          {(["graph", "list"] as const).map((nextView) => (
+            <button
+              key={nextView}
+              type="button"
+              className={chipClass(view === nextView)}
+              onClick={() => setView(nextView)}
+            >
+              {nextView}
             </button>
           ))}
           <ThemeToggle className={`${chipClass(false)} px-2`} />
@@ -87,29 +90,29 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             {state} · {counts[state]}
           </button>
         ))}
-        <button type="button" className={chipClass(favoritesOnly)} onClick={() => setFavoritesOnly((v) => !v)}>
+        <button type="button" className={chipClass(favoritesOnly)} onClick={() => setFavoritesOnly((value) => !value)}>
           favorites
         </button>
         <select
           value={site}
-          onChange={(e) => setSite(e.target.value)}
+          onChange={(event) => setSite(event.target.value)}
           className="rounded-full border border-border bg-background px-3 py-1"
         >
           <option value="">all sites</option>
-          {sites.map((s) => (
-            <option key={s} value={s}>
-              {s}
+          {sites.map((sourceSite) => (
+            <option key={sourceSite} value={sourceSite}>
+              {sourceSite}
             </option>
           ))}
         </select>
         <select
           value={minWords}
-          onChange={(e) => setMinWords(Number(e.target.value))}
+          onChange={(event) => setMinWords(Number(event.target.value))}
           className="rounded-full border border-border bg-background px-3 py-1"
         >
-          {[0, 1000, 3000, 5000].map((n) => (
-            <option key={n} value={n}>
-              {n ? `${n.toLocaleString()}+ words` : "any length"}
+          {[0, 1000, 3000, 5000].map((wordCount) => (
+            <option key={wordCount} value={wordCount}>
+              {wordCount ? `${wordCount.toLocaleString()}+ words` : "any length"}
             </option>
           ))}
         </select>
@@ -123,7 +126,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
       ) : (
         <div className="grid gap-8 md:grid-cols-3">
           {sourceStates.map((state) => {
-            const items = visible.filter((s) => s.state === state);
+            const items = visible.filter((source) => source.state === state);
             if (items.length === 0) return null;
             return (
               <section key={state}>
@@ -131,16 +134,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                   {state} · {items.length}
                 </h2>
                 <ul className="space-y-2">
-                  {items.map((s) => (
-                    <li key={s.matter_id} className="flex gap-2">
+                  {items.map((source) => (
+                    <li key={source.matter_id} className="flex gap-2">
                       <svg width={16} height={16} viewBox="-8 -8 16 16" className="mt-1 shrink-0" aria-hidden>
-                        <SourceGlyph r={5} state={s.state} progress={s.progress} />
+                        <SourceGlyph r={5} state={source.state} progress={source.progress} />
                       </svg>
                       <p>
-                        <Link to={`/source/${s.matter_id}`} className="hover:underline">
-                          {s.title}
+                        <Link to="/source/$id" params={{ id: source.matter_id }} className="hover:underline">
+                          {source.title}
                         </Link>{" "}
-                        <span className="text-xs text-muted-foreground">{sourceFacts(s)}</span>
+                        <span className="text-xs text-muted-foreground">{sourceFacts(source)}</span>
                       </p>
                     </li>
                   ))}
