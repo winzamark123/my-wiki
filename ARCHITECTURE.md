@@ -32,7 +32,7 @@ Portfolio site ──▶ GET /api/index (public, read-only) ──────�
 
 ## Apps
 
-**Today** the repo is one Worker (`wiki-app`): React Router routes, the sync workflow, and the R2/AI bindings in one deploy. **Target** (milestone M2) is two Workers in a pnpm workspace:
+The repo is a pnpm workspace with two Workers:
 
 ```
 apps/server-app/  Worker my-wiki-server-app: R2, AI, Workflows, cron, HTTP API. All Matter and R2 access.
@@ -50,18 +50,18 @@ The rule: if code reads Matter, reads or writes R2, or calls a model, it is in t
 
 | Route | Returns |
 | --- | --- |
-| `GET /api/index` | `index.json` with `excerpt` removed; `Cache-Control: public, max-age=60`, CORS `*` |
+| `GET /api/index` | `index.json` with `excerpt` removed; `Cache-Control: public, max-age=0, s-maxage=60` |
 | `GET /api/sources/:id` | `{ meta, body }`; body is the Matter markdown, rendered by the client |
 | `POST /api/sync?full=1` | `{ id }` of the new `MatterSyncWorkflow` instance |
 | `GET /api/sync/:id` | instance status |
 | `POST /api/reindex` | dev only: rebuild index, embeddings, links |
 | `/api/book/*` | added in M3 |
 
-No auth until M5: the whole thing runs in dev until the book flow works end to end. The server can still be deployed on its own before that: with `workers_dev` off and no custom domain, no route is reachable, but the cron fires and fills R2. Five routes do not need a router library; a `switch` on `url.pathname` is enough until the book routes arrive, then reconsider.
+No auth until M5: the whole thing runs in dev until the book flow works end to end. The server can still be deployed on its own before that: with `workers_dev` off and no custom domain, no route is reachable, but the cron fires and fills R2. Hono defines the API routes. CORS is added before the first browser client calls the public index directly.
 
-The web app reads `SERVER_URL` from its vars (`http://localhost:8787` in dev). A service binding from web to server is possible later for latency, but HTTP is the only contract so every client is treated the same.
+The app reads `SERVER_URL` from its vars (`http://localhost:8787` in dev). A service binding from app to server is possible later for latency, but HTTP is the only contract so every client is treated the same.
 
-Local dev runs both Workers; they share one local R2 store by pointing both wrangler configs at the same persist directory.
+Local development runs both Workers. Only `server-app` has a local R2 store.
 
 ### Multi-user (milestone M7)
 
@@ -177,7 +177,7 @@ First run has no cursor and backfills everything (47 archived, 86 queued today).
 
 Sources are written by the sync job only (`writeSource`); `index.json`, `embeddings.json`, and `links.json` are updated once per sync. Only the server touches R2. Source pages are served with `no-store`; the graph is edge-cached for 60 s, so a sync is visible within a minute. Cache purge on write is a later addition.
 
-## Web app
+## App
 
 React Router v8 framework mode on Workers (see git history for the Astro/SPA comparison). Routes:
 
@@ -185,7 +185,7 @@ React Router v8 framework mode on Workers (see git history for the Astro/SPA com
 - `/source/:id` source page with its Related list (private). Loader calls `GET /api/sources/:id` and renders the markdown with `marked`.
 - `/book` builder (M3), backed by the server's `/api/book/*`.
 
-Until M2 lands, the loaders read R2 directly and `/api/sync` and `/api/reindex` are routes of this app.
+The loaders call `server-app` over HTTP and validate each JSON response against the server's Zod schemas. The app has no R2, AI, Workflow, cron, or Matter bindings.
 
 Removed from earlier designs: input box, red-link generation, LLM-written topic pages, `/wiki/:slug`.
 
@@ -199,7 +199,7 @@ The server is not behind Access. `GET /api/index` is public; every other route c
 
 Server secrets: `MATTER_API_TOKEN` (until M7), `LULU_CLIENT_KEY`, `LULU_CLIENT_SECRET`, and from M5 `API_TOKEN`; vars `LULU_BASE_URL`, `BOOK_POD_PACKAGE_ID`; bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. Browser Rendering requires the Workers Paid plan.
 
-Web vars: `SERVER_URL`; from M5 the `API_TOKEN` secret. No bindings.
+App vars: `SERVER_URL`; from M5 the `API_TOKEN` secret. No data bindings.
 
 ## Milestones
 
