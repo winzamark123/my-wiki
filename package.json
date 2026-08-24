@@ -1,43 +1,16 @@
 {
-	"name": "wiki-app",
-	"private": true,
-	"type": "module",
-	"scripts": {
-		"build": "react-router build",
-		"dev": "react-router dev",
-		"typecheck": "wrangler types && react-router typegen && tsc -b",
-		"test": "vitest run",
-		"deploy": "pnpm run build && wrangler deploy",
-		"preview": "pnpm run build && vite preview",
-		"cf-typegen": "wrangler types",
-		"postinstall": "wrangler types"
-	},
-	"dependencies": {
-		"class-variance-authority": "^0.7.1",
-		"clsx": "^2.1.1",
-		"d3-force": "^3.0.0",
-		"isbot": "^5.1.36",
-		"marked": "^18.0.6",
-		"radix-ui": "^1.6.2",
-		"react": "^19.2.7",
-		"react-dom": "^19.2.7",
-		"react-router": "8.0.0",
-		"tailwind-merge": "^3.6.0",
-		"zod": "^4.4.3"
-	},
-	"devDependencies": {
-		"@cloudflare/vite-plugin": "^1.44.0",
-		"@react-router/dev": "8.0.0",
-		"@tailwindcss/typography": "^0.5.20",
-		"@tailwindcss/vite": "^4.2.2",
-		"@types/d3-force": "^3.0.10",
-		"@types/node": "^22",
-		"@types/react": "^19.2.14",
-		"@types/react-dom": "^19.2.3",
-		"tailwindcss": "^4.2.2",
-		"typescript": "^5.9.3",
-		"vite": "^8.0.3",
-		"vitest": "^4.1.11",
-		"wrangler": "^4.110.0"
-	}
+  "name": "my-wiki",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "deploy:app": "pnpm --filter @my-wiki/app deploy"
+  },
+  "devDependencies": {
+    "turbo": "^2.10.0"
+  },
+  "packageManager": "pnpm@10.20.0"
 }
