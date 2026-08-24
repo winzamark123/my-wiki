@@ -1,7 +1,5 @@
 import { createRequestHandler } from "react-router";
 
-export { MatterSyncWorkflow } from "./matter-sync";
-
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
   import.meta.env.MODE,

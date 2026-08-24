@@ -1,26 +1,23 @@
-import { env } from "cloudflare:workers";
+import { sourceStates } from "@my-wiki/server-app/sources";
+import type { IndexSource } from "@my-wiki/server-app/wiki";
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 
 import type { Route } from "./+types/home";
 import { Graph, SourceGlyph } from "~/components/graph";
 import { ThemeToggle } from "~/components/theme-toggle";
-import { sourceStates } from "~/lib/sources";
-import type { IndexSource } from "~/lib/wiki";
-import { CACHE_HEADERS, getIndex } from "~/lib/wiki.server";
+import { getIndex } from "~/lib/api.server";
 
 export function meta() {
   return [{ title: "Wiki" }];
 }
 
 export function headers() {
-  return CACHE_HEADERS;
+  return { "Cache-Control": "public, max-age=0, s-maxage=60" };
 }
 
 export async function loader() {
-  const { sources, links } = await getIndex(env.WIKI);
-  // the graph doesn't need excerpts; keep the payload small
-  return { sources: sources.map(({ excerpt: _excerpt, ...rest }) => rest), links };
+  return getIndex();
 }
 
 type State = IndexSource["state"];

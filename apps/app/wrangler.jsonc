@@ -3,36 +3,21 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "wiki-app",
-	"account_id": "e62b5d31403985d71d0a4faae9948728",
-	"compatibility_date": "2026-07-11",
-	"main": "./workers/app.ts",
-	// keep write routes unreachable until a custom domain is protected by Access
-	"workers_dev": false,
-	"preview_urls": false,
-	"observability": {
-		"enabled": true
-	},
-	"upload_source_maps": true,
-	"compatibility_flags": ["nodejs_compat", "enable_request_signal"],
-	// edge-caches responses per Cache-Control headers; hits skip the Worker
-	"cache": { "enabled": true },
-	// embeddings for similarity edges
-	"ai": { "binding": "AI" },
-	"r2_buckets": [
-		{
-			"binding": "WIKI",
-			"bucket_name": "my-wiki"
-		}
-	],
-	"workflows": [
-		{
-			"name": "matter-sync",
-			"binding": "MATTER_SYNC",
-			"class_name": "MatterSyncWorkflow",
-			// daily pull of the Matter queue + archive
-			"schedules": ["0 6 * * *"]
-		}
-	]
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-wiki-app",
+  "account_id": "e62b5d31403985d71d0a4faae9948728",
+  "compatibility_date": "2026-07-11",
+  "main": "./workers/app.ts",
+  // keep the UI unreachable until a custom domain is protected in M5
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true,
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  "cache": { "enabled": true },
+  "vars": {
+    "SERVER_URL": "http://localhost:8787"
+  }
 }

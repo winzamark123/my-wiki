@@ -1,11 +1,9 @@
-import { env } from "cloudflare:workers";
 import { data, Link } from "react-router";
 
 import type { Route } from "./+types/source";
 import { SourceGlyph } from "~/components/graph";
+import { getIndex, getSource } from "~/lib/api.server";
 import { renderMarkdown } from "~/lib/markdown.server";
-import { getSource } from "~/lib/sources.server";
-import { getIndex } from "~/lib/wiki.server";
 
 export function meta({ loaderData }: Route.MetaArgs) {
   return [{ title: loaderData ? `${loaderData.meta.title} · Source` : "Source" }];
@@ -17,7 +15,7 @@ export function headers() {
 }
 
 export async function loader({ params }: Route.LoaderArgs) {
-  const [source, index] = await Promise.all([getSource(env.WIKI, params.id), getIndex(env.WIKI)]);
+  const [source, index] = await Promise.all([getSource({ id: params.id }), getIndex()]);
   if (!source) throw data("source not found", { status: 404 });
   const titles = new Map(index.sources.map((s) => [s.matter_id, s.title]));
   const related = index.links.flatMap(({ a, b, label }) => {

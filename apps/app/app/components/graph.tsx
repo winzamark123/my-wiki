@@ -12,7 +12,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 
-import type { IndexSource, Link as WikiLink } from "~/lib/wiki";
+import type { IndexSource, Link as WikiLink } from "@my-wiki/server-app/wiki";
 
 // node vocabulary: DESIGN.md → Surfaces → Graph
 type GraphNode = SimulationNodeDatum & {
