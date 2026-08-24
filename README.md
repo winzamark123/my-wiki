@@ -2,6 +2,8 @@
 
 A graph of everything I read in Matter, one page per item, printable as a book. See [DESIGN.md](DESIGN.md) for the product spec and [ARCHITECTURE.md](ARCHITECTURE.md) for how it maps onto Cloudflare.
 
+The pnpm workspace keeps deployable Workers under `apps/`. The current application lives in `apps/app`; `pnpm` commands run from the repository root.
+
 ## Local development
 
 ```sh
@@ -22,9 +24,9 @@ Workers AI (embeddings) always runs remotely, even in dev, so `wrangler login` m
 Requires `wrangler login` on the account above, then:
 
 ```sh
-pnpm exec wrangler r2 bucket create my-wiki     # once
-pnpm exec wrangler secret put MATTER_API_TOKEN  # masked prompt; never pass the value as an argument
-pnpm run deploy
+pnpm --filter @my-wiki/app exec wrangler r2 bucket create my-wiki     # once
+pnpm --filter @my-wiki/app exec wrangler secret put MATTER_API_TOKEN  # masked prompt; never pass the value as an argument
+pnpm run deploy:app
 ```
 
 `workers_dev` and preview URLs are disabled in `wrangler.jsonc`. The deployment remains unreachable until a custom domain is attached; private routes (`/source/*`, `/book*`, `/api/*`) are then gated by Cloudflare Access with One-time PIN.

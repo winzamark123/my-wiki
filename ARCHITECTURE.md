@@ -4,9 +4,9 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 
 ## Stack at a glance
 
-- **Server** (`apps/server`): one Worker that owns every binding (R2, Workers AI, Workflows, cron) and serves an HTTP JSON API. Everything that talks to Matter or R2 lives here.
-- **Web** (`apps/web`): React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`. Reads from the server API only; no bindings of its own.
-- **Schema** (`packages/schema`): the Zod schemas both apps parse against (`index.json`, source frontmatter, links).
+- **Server** (`apps/server-app`): one Worker that owns every binding (R2, Workers AI, Workflows, cron) and serves an HTTP JSON API. Everything that talks to Matter or R2 lives here.
+- **App** (`apps/app`): React Router v8 (framework mode) + shadcn/ui + Tailwind, deployed to Workers via `@cloudflare/vite-plugin`. Reads from the server API only; no data bindings of its own.
+- **API contract**: Zod schemas exported by `server-app` and parsed by `app`. The runtime contract is HTTP JSON, so external clients do not depend on workspace code.
 - **Content store**: R2 (markdown, index, embeddings, book files)
 - **Jobs**: Cloudflare Workflows (Matter sync, book build; later digest and suggestions)
 - **Links**: Workers AI through the `AI` binding: `@cf/baai/bge-m3` embeddings (1024 dims), `@cf/baai/bge-reranker-base`, `@cf/meta/llama-3.3-70b-instruct-fp8-fast` for link labels
@@ -18,12 +18,12 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 - **Email**: Cloudflare Email Service (later: digest, suggestions, order status)
 
 ```
-                 ┌──────────────── server (apps/server) ────────────────┐
+                 ┌──────────── server (apps/server-app) ───────────────┐
 Matter API ──daily──▶ MatterSyncWorkflow ──writes──▶ R2 sources/ + embeddings.json + links.json + index.json
                  │  GET /api/index · GET /api/sources/:id · POST /api/sync · /api/book/*   │
                  └───────────────────────────▲──────────────────────────┘
                                              │ HTTP JSON
-Browser ──▶ web (apps/web): SSR graph / source / book pages ─┘
+Browser ──▶ app (apps/app): SSR graph / source / book pages ─┘
 Portfolio site ──▶ GET /api/index (public, read-only) ───────┘
 
 /book ──▶ BookWorkflow (server): plan → interior.html → Browser Rendering → interior.pdf
@@ -32,15 +32,16 @@ Portfolio site ──▶ GET /api/index (public, read-only) ──────�
 
 ## Apps
 
-**Today** the repo is one Worker (`wiki-app`): React Router routes, the sync workflow, and the R2/AI bindings in one deploy. **Target** (milestone M2) is two Workers and a shared package in a pnpm workspace:
+**Today** the repo is one Worker (`wiki-app`): React Router routes, the sync workflow, and the R2/AI bindings in one deploy. **Target** (milestone M2) is two Workers in a pnpm workspace:
 
 ```
-apps/server/      Worker my-wiki-server: R2, AI, Workflows, cron, HTTP API. All Matter and R2 access.
-apps/web/         Worker my-wiki-web: the React Router UI. Loaders call the server API over HTTP.
-packages/schema/  Zod schemas + pure helpers shared by both (no barrel file; import by path).
+apps/server-app/  Worker my-wiki-server-app: R2, AI, Workflows, cron, HTTP API. All Matter and R2 access.
+apps/app/         Worker my-wiki-app: the React Router UI. Loaders call the server API over HTTP.
 ```
 
-The rule: if code reads Matter, reads or writes R2, or calls a model, it is in the server. The web app is one client of the server; it gets no special access. Two reasons:
+The server exports the Zod schemas for its API responses. The app imports those schemas to validate responses, but all runtime communication is HTTP. Add `packages/db` only if a real D1 or PostgreSQL schema and migration tooling arrive; R2 access remains private to `server-app`.
+
+The rule: if code reads Matter, reads or writes R2, or calls a model, it is in the server. The app is one client of the server; it gets no special access. Two reasons:
 
 1. Other clients will read the same data from other deployments. The first is a "my readings" page on my portfolio site, which needs only the public graph.
 2. More than one person will use it. Each user will add their own Matter token, and the server will sync each library on its own schedule (see Multi-user below).
@@ -150,7 +151,7 @@ Links are computed at sync time, per source, in three stages, all through the `A
 2. **Rerank.** `bge-reranker-base` reads the source and each candidate together (the first ~1,500 characters of each) and scores them 0–1. Keep up to 4 with score ≥ 0.2.
 3. **Verdict and label.** Llama 3.3 70B gets the same heads and returns JSON per candidate: related or not, plus a label of at most 8 words saying what they share. Accepted pairs get the label; rejected pairs are stored with `null`.
 
-A source is (re)linked when its embedded text hash changes, which happens once: when the body is first fetched. Every pair is judged once, from whichever side saw it first, so the LLM cost is per new article, not per sync. The graph draws `index.json.links` and shows the label on hover; the source page lists them under Related. Tunables live at the top of `app/lib/links.server.ts`.
+A source is (re)linked when its embedded text hash changes, which happens once: when the body is first fetched. Every pair is judged once, from whichever side saw it first, so the LLM cost is per new article, not per sync. The graph draws `index.json.links` and shows the label on hover; the source page lists them under Related. Tunables live at the top of `apps/server-app/src/links.server.ts`.
 
 ## Workflows
 
@@ -205,7 +206,7 @@ Web vars: `SERVER_URL`; from M5 the `API_TOKEN` secret. No bindings.
 Tracked in Linear (project my-wiki). Each milestone's issues are ordered by blocking relations; an issue that blocks nothing can run in parallel.
 
 1. **Sync + graph**: `MatterSyncWorkflow`, source pages, embeddings, `index.json` with labeled links, graph view with the state vocabulary. Verify: run sync, see the library as correctly labeled nodes. Done.
-2. **Server + client split**: workspace layout, `apps/server` with the API and all bindings, `apps/web` reading over HTTP, CORS for external clients. Verify: both Workers run locally, the graph and source pages render from the API, the web app has no bindings.
+2. **Server + client split**: workspace layout, `apps/server-app` with the API and all bindings, `apps/app` reading over HTTP, CORS for external clients. Verify: both Workers run locally, the graph and source pages render from the API, and the app has no data bindings.
 3. **Book PDFs**: `BookWorkflow` through interior and cover PDF download, all in dev. Verify: open PDFs, check size and bleed against Lulu's template.
 4. **Lulu order**: cover dimensions, quote, sandbox order, status, email. Then a production order from dev and a physical proof.
 5. **Access + deploy**: only after the wiki-to-book flow works end to end. Custom domain for both Workers, Access with One-time PIN on web, `API_TOKEN`, first production sync.
