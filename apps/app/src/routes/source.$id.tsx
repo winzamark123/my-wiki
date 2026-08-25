@@ -78,7 +78,7 @@ function Source() {
           Read on {meta.site ?? "the original site"} ↗
         </a>
       </header>
-      <article className="prose prose-neutral dark:prose-invert" dangerouslySetInnerHTML={{ __html: html }} />
+      <article className="prose prose-neutral font-serif dark:prose-invert" dangerouslySetInnerHTML={{ __html: html }} />
       {related.length > 0 && (
         <section className="mt-12 border-t border-border pt-6">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Related</h2>

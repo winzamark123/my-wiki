@@ -96,6 +96,7 @@ embeddings.json           one vector per source, read only by the sync job
 links.json                every judged pair with its label (or null when rejected)
 sync.json                 { cursor: <updated_since ISO>, lastRun }
 log.md                    append-only record of syncs and book builds
+books/index.json          completed exports and the source cutoff for the next export
 books/<bookId>/           manifest.json · interior.html · interior.pdf · cover.pdf · status.json
 ```
 
@@ -168,11 +169,12 @@ Every background job is a Workflow: each action is a `step.do` checkpoint, dynam
 First run has no cursor and backfills everything (47 archived, 86 queued today).
 
 **`BookWorkflow`** — on demand from `/book`.
-1. Selection → chapter plan (`manifest.json`: chapters with a title and ordered source ids). Grouping by embedding similarity; whether a model titles the chapters is open (DESIGN.md → Open questions).
-2. Render `interior.html` (print CSS: `@page` size and margins, running heads, page numbers, TOC, chapter title pages, article title blocks) → Browser Rendering → `interior.pdf`; read page count.
-3. Lulu cover dimensions → `cover.html` → `cover.pdf`.
-4. Lulu cost quote → `status.json` → `step.waitForEvent("confirm")`.
-5. Lulu print job with signed R2 URLs for both PDFs → poll status → email.
+1. Read the last completed export from `books/index.json`, capture the current source cutoff, and select sources archived within that range. The first export selects all archived sources. Give a model the source titles, links, and embeddings; it groups and orders the sources and writes a short title for each chapter. Store the result in `manifest.json` as chapters with a title and ordered source ids.
+2. Render the articles and their native images to `interior.html` (6 × 9 inch print CSS, margins, running heads, page numbers, TOC, chapter title pages, article title blocks) → Browser Rendering → Premium Color `interior.pdf`; read page count.
+3. Generate cover artwork, request Lulu cover dimensions, and lay out the artwork and typography in `cover.html` → matte `cover.pdf`.
+4. After both PDFs succeed, append the export and its source cutoff to `books/index.json`. Previews and failed exports do not advance the cutoff.
+5. Lulu cost quote → `status.json` → `step.waitForEvent("confirm")`.
+6. Lulu print job with signed R2 URLs for both PDFs → poll status → email.
 
 ## Writes
 
@@ -196,7 +198,7 @@ Nothing is public before M5; both Workers keep `workers_dev` off and have no cus
 
 ## Secrets and bindings
 
-Server secrets: `MATTER_API_TOKEN` (until M7), `LULU_CLIENT_KEY`, and `LULU_CLIENT_SECRET`; vars `FRONTEND_URL`, `LULU_BASE_URL`, and `BOOK_POD_PACKAGE_ID`; bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. Browser Rendering requires the Workers Paid plan.
+Server secrets: `MATTER_API_TOKEN` (until M7), `LULU_CLIENT_KEY`, and `LULU_CLIENT_SECRET`; vars `FRONTEND_URL`, `LULU_BASE_URL`, and `BOOK_POD_PACKAGE_ID` (`0600X0900.FC.PRE.PB.080CW444.MXX`); bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. Browser Rendering requires the Workers Paid plan.
 
 App build variable: `VITE_API_URL`. The app has no runtime secrets or data bindings.
 
@@ -205,7 +207,7 @@ App build variable: `VITE_API_URL`. The app has no runtime secrets or data bindi
 Tracked in Linear (project my-wiki). Each milestone's issues are ordered by blocking relations; an issue that blocks nothing can run in parallel.
 
 1. **Sync + graph**: `MatterSyncWorkflow`, source pages, embeddings, `index.json` with labeled links, graph view with the state vocabulary. Verify: run sync, see the library as correctly labeled nodes. Done.
-2. **Server + client split**: workspace layout, `apps/server-app` with the API and all bindings, and `apps/app` as a Vite SPA reading over HTTP. Verify: both apps run locally, the graph and source pages render from the API, and the app has no data bindings.
+2. **Server + client split**: workspace layout, `apps/server-app` with the API and all bindings, and `apps/app` as a Vite SPA reading over HTTP. Verify: both apps run locally, the graph and source pages render from the API, and the app has no data bindings. Done.
 3. **Book PDFs**: `BookWorkflow` through interior and cover PDF download, all in dev. Verify: open PDFs, check size and bleed against Lulu's template.
 4. **Lulu order**: cover dimensions, quote, sandbox order, status, email. Then a production order from dev and a physical proof.
 5. **Access + deploy**: only after the wiki-to-book flow works end to end. Choose browser-safe authentication, attach custom domains to both apps, and run the first production sync.
