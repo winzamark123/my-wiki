@@ -2,13 +2,14 @@
 // see ARCHITECTURE.md → Links
 import { z } from "zod";
 
+import { parseModelJson, TEXT_MODEL } from "./ai";
 import { getEmbeddingStore, nearestSources, type EmbeddingStore } from "./embeddings";
+import { putJson } from "./r2";
 import { headText } from "./sources";
 import { getSource } from "./source-store";
 import type { Link } from "./wiki";
 
 const RERANKER = "@cf/baai/bge-reranker-base";
-const LABELER = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 // candidates from embeddings, how many the reranker forwards, and its 0–1 score floor
 const CANDIDATES = 8;
 const RERANK_KEEP = 4;
@@ -78,11 +79,6 @@ async function head(bucket: R2Bucket, id: string) {
   return source ? headText({ title: source.meta.title, body: source.body }) : null;
 }
 
-function parseVerdict(response: unknown) {
-  const data: unknown = typeof response === "string" ? JSON.parse(response) : response;
-  return verdictSchema.parse(data);
-}
-
 async function linkSource({
   bucket,
   ai,
@@ -123,7 +119,7 @@ async function linkSource({
   for (const { id } of pool) links.pairs[pairKey(sourceId, id)] = { label: null };
 
   if (text && kept.length > 0) {
-    const result = await ai.run(LABELER, {
+    const result = await ai.run(TEXT_MODEL, {
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         {
@@ -139,7 +135,7 @@ async function linkSource({
       max_tokens: 400,
       temperature: 0.2,
     });
-    const verdict = parseVerdict(typeof result === "object" && "response" in result ? result.response : result);
+    const verdict = parseModelJson({ result, schema: verdictSchema });
     for (const { index, related, label } of verdict.links) {
       const candidate = kept[index];
       if (candidate && related && label.trim()) {
@@ -157,8 +153,6 @@ export async function linkSources({ bucket, ai, ids }: { bucket: R2Bucket; ai: A
   for (const sourceId of ids) {
     if (store.vectors[sourceId]) await linkSource({ bucket, ai, store, links, sourceId });
   }
-  await bucket.put("links.json", JSON.stringify(links), {
-    httpMetadata: { contentType: "application/json" },
-  });
+  await putJson({ bucket, key: "links.json", value: links });
   return links;
 }

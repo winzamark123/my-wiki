@@ -33,6 +33,14 @@ export const app = new Hono<{ Bindings: Env }>()
     const instance = await c.env.MATTER_SYNC.create({ params: { full: query.data.full === "1" } });
     return c.json({ id: instance.id }, 202);
   })
+  .post("/api/book", async (c) => {
+    const sourceCutoff = new Date().toISOString();
+    const instance = await c.env.BOOK.create({
+      id: `book-${crypto.randomUUID()}`,
+      params: { source_cutoff: sourceCutoff },
+    });
+    return c.json({ id: instance.id, source_cutoff: sourceCutoff }, 202);
+  })
   .get("/api/sync/:id", async (c) => {
     try {
       const instance = await c.env.MATTER_SYNC.get(c.req.param("id"));

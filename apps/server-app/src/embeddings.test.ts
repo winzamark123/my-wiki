@@ -24,6 +24,13 @@ describe("nearestSources", () => {
     expect(nearestSources({ store, sourceId: "itm_a", count: 2 })).toEqual(["itm_closer", "itm_close"]);
   });
 
+  it("limits results to candidate ids when provided", () => {
+    expect(nearestSources({ store, sourceId: "itm_a", count: 2, candidateIds: new Set(["itm_far", "itm_third"]) })).toEqual([
+      "itm_third",
+      "itm_far",
+    ]);
+  });
+
   it("returns nothing for an unknown source", () => {
     expect(nearestSources({ store, sourceId: "itm_none", count: 2 })).toEqual([]);
   });

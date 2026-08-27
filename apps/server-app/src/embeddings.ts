@@ -1,6 +1,8 @@
 // one vector per source for link candidates. see ARCHITECTURE.md → Links
 import { z } from "zod";
 
+import { putJson } from "./r2";
+
 // 8192-token context, so a whole article fits in one vector; changing the model re-embeds everything
 const MODEL = "@cf/baai/bge-m3";
 const DIMS = 1024;
@@ -60,9 +62,7 @@ export async function refreshEmbeddings({
 
   // drop vectors for sources that no longer exist
   for (const key of orphans) delete store.vectors[key];
-  await bucket.put("embeddings.json", JSON.stringify(store), {
-    httpMetadata: { contentType: "application/json" },
-  });
+  await putJson({ bucket, key: "embeddings.json", value: store });
   return store;
 }
 
@@ -79,11 +79,21 @@ function cosine(a: number[], b: number[]) {
 }
 
 // the closest other sources, best first; brute force is fine at personal scale
-export function nearestSources({ store, sourceId, count }: { store: EmbeddingStore; sourceId: string; count: number }) {
+export function nearestSources({
+  store,
+  sourceId,
+  count,
+  candidateIds,
+}: {
+  store: EmbeddingStore;
+  sourceId: string;
+  count: number;
+  candidateIds?: Set<string>;
+}) {
   const source = store.vectors[sourceId];
   if (!source) return [];
   return Object.entries(store.vectors)
-    .filter(([id]) => id !== sourceId)
+    .filter(([id]) => id !== sourceId && (!candidateIds || candidateIds.has(id)))
     .map(([id, { vector }]) => ({ id, score: cosine(source.vector, vector) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, count)

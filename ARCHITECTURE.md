@@ -10,6 +10,7 @@ How [DESIGN.md](DESIGN.md) maps onto Cloudflare. DESIGN.md says *what*; this say
 - **Content store**: R2 (markdown, index, embeddings, book files)
 - **Jobs**: Cloudflare Workflows (Matter sync, book build; later digest and suggestions)
 - **Links**: Workers AI through the `AI` binding: `@cf/baai/bge-m3` embeddings (1024 dims), `@cf/baai/bge-reranker-base`, `@cf/meta/llama-3.3-70b-instruct-fp8-fast` for link labels
+- **Artwork**: fal.ai Recraft V4 Styles Pro with one reusable custom style trained from the approved reference board
 - **PDF**: Browser Rendering (`@cloudflare/puppeteer`, `page.pdf()`) through the `BROWSER` binding
 - **Printing**: Lulu Print API (sandbox, then production)
 - **Graph UI**: d3-force layout, React SVG nodes
@@ -27,8 +28,9 @@ Browser ──▶ app (apps/app): static graph / source / book UI
         └──────────────▶ server HTTP JSON API ──────────────┘
 Portfolio site ────────▶ GET /api/index (public, read-only) ─┘
 
-/book ──▶ BookWorkflow (server): plan → interior.html → Browser Rendering → interior.pdf
-                                 → Lulu cover dims → cover.pdf → quote → confirm → print job → status
+/book ──▶ BookWorkflow (server): plan + title → FAL cover/chapter artwork → interior.html
+                                 → Browser Rendering → interior.pdf → Lulu cover dims → cover.pdf
+                                 → quote → confirm → print job → status
 ```
 
 ## Apps
@@ -80,8 +82,13 @@ Local development runs both Workers. Only `server-app` has a local R2 store.
 - Limits: 120 reads/min, 5/s burst. No webhooks. No publish date in the item.
 - Item fields used: `id`, `title`, `url`, `site_name`, `author.name`, `status`, `processing_status`, `content_type`, `word_count`, `reading_progress`, `excerpt`, `is_favorite`, `library_position`, `updated_at`. Inline article images are hosted on `media.getmatter.app`; Matter's 600×600 hero thumbnails (`image_url`) are not used.
 
+**fal.ai** (API key):
+- `POST recraft/v4/pro/create-style` once for the approved reference images; store the reusable style id.
+- `recraft/v4/style/pro/text-to-image` through the queue API for one book-cover source image and one image per grouped chapter.
+- Download completed assets immediately into R2. FAL result URLs are not the source of truth.
+
 **Lulu** (`https://api.lulu.com`, sandbox `https://api.sandbox.lulu.com`, OAuth2 client credentials):
-- `POST /calculate-cover-dimensions/ {pod_package_id, interior_page_count, unit}`
+- `POST /cover-dimensions/ {pod_package_id, interior_page_count, unit}`
 - `POST /print-job-cost-calculations/`
 - `POST /print-jobs` with `line_items[{ printable_normalization: { interior.source_url, cover.source_url, pod_package_id }, quantity, title }]`, `shipping_address`, `shipping_level`
 - `GET /print-jobs/{id}/status/`
@@ -97,7 +104,7 @@ links.json                every judged pair with its label (or null when rejecte
 sync.json                 { cursor: <updated_since ISO>, lastRun }
 log.md                    append-only record of syncs and book builds
 books/index.json          completed exports and the source cutoff for the next export
-books/<bookId>/           manifest.json · interior.html · interior.pdf · cover.pdf · status.json
+books/<bookId>/           manifest.json · artwork.json · artwork/* · interior.html · interior.pdf · cover.html · cover.pdf · status.json
 ```
 
 ## Schema
@@ -169,12 +176,13 @@ Every background job is a Workflow: each action is a `step.do` checkpoint, dynam
 First run has no cursor and backfills everything (47 archived, 86 queued today).
 
 **`BookWorkflow`** — on demand from `/book`.
-1. Read the last completed export from `books/index.json`, capture the current source cutoff, and select sources archived within that range. The first export selects all archived sources. Give a model the source titles, links, and embeddings; it groups and orders the sources and writes a short title for each chapter. Store the result in `manifest.json` as chapters with a title and ordered source ids.
-2. Render the articles and their native images to `interior.html` (6 × 9 inch print CSS, margins, running heads, page numbers, TOC, chapter title pages, article title blocks) → Browser Rendering → Premium Color `interior.pdf`; read page count.
-3. Generate cover artwork, request Lulu cover dimensions, and lay out the artwork and typography in `cover.html` → matte `cover.pdf`.
-4. After both PDFs succeed, append the export and its source cutoff to `books/index.json`. Previews and failed exports do not advance the cutoff.
-5. Lulu cost quote → `status.json` → `step.waitForEvent("confirm")`.
-6. Lulu print job with signed R2 URLs for both PDFs → poll status → email.
+1. Read the last completed export from `books/index.json`, capture the current source cutoff, and select sources archived within that range, excluding X posts because they have no usable article body. The first export selects all other archived sources. Give a model the source titles, links, and embeddings; it groups and orders the sources, writes one literary book title, and writes a distinct short title for each chapter. Store the result in `manifest.json`.
+2. Submit one cover-art request and one request per grouped chapter to FAL's queue with the persisted Recraft V4 Styles Pro style id. Store each request id in its Workflow step, download completed image bytes to `books/<bookId>/artwork/`, and write prompts and model metadata to `artwork.json`. Retries reuse completed requests and stored assets.
+3. Render the cover artwork as the title-page background and each grouped chapter's artwork as a full-bleed opener. Article text remains one continuous, balanced two-column flow per chapter, without a center rule and with each article starting in the next available column. Images with a landscape ratio of at least 1.25 and enough pixels for at least 150 PPI at the full text width span both columns; smaller, near-square, and portrait images stay within one column; logo images and repository status badges are omitted. Include US Letter print CSS (8.5 × 11 inch trim; 8.75 × 11.25 inch full-bleed PDF), margins on content pages, footer page numbers, a two-column TOC with chapter and article page references, and article title blocks → Browser Rendering → Premium Color `interior.pdf`; read page count.
+4. Request Lulu cover dimensions from the final interior page count and lay out the stored cover artwork and typography in `cover.html` → matte `cover.pdf`.
+5. After both PDFs succeed, append the export and its source cutoff to `books/index.json`. Previews and failed exports do not advance the cutoff.
+6. Lulu cost quote → `status.json` → `step.waitForEvent("confirm")`.
+7. Lulu print job with signed R2 URLs for both PDFs → poll status → email.
 
 ## Writes
 
@@ -198,7 +206,7 @@ Nothing is public before M5; both Workers keep `workers_dev` off and have no cus
 
 ## Secrets and bindings
 
-Server secrets: `MATTER_API_TOKEN` (until M7), `LULU_CLIENT_KEY`, and `LULU_CLIENT_SECRET`; vars `FRONTEND_URL`, `LULU_BASE_URL`, and `BOOK_POD_PACKAGE_ID` (`0600X0900.FC.PRE.PB.080CW444.MXX`); bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. Browser Rendering requires the Workers Paid plan.
+Server secrets: `MATTER_API_TOKEN` (until M7), `FAL_KEY`, `LULU_CLIENT_KEY`, and `LULU_CLIENT_SECRET`; local configuration includes the reusable `FAL_STYLE_ID`; vars `FRONTEND_URL`, `LULU_BASE_URL`, and `BOOK_POD_PACKAGE_ID` (`0850X1100.FC.PRE.PB.080CW444.MXX`); bindings `WIKI` (R2), `AI`, `BROWSER`, workflows `MATTER_SYNC`, `BOOK`. The `BROWSER` binding uses the remote Browser Run service during local development.
 
 App build variable: `VITE_API_URL`. The app has no runtime secrets or data bindings.
 

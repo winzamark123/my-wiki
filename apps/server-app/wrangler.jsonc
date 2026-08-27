@@ -22,6 +22,7 @@
     "FRONTEND_URL": "http://localhost:5173"
   },
   "ai": { "binding": "AI" },
+  "browser": { "binding": "BROWSER", "remote": true },
   "r2_buckets": [
     {
       "binding": "WIKI",
@@ -34,6 +35,11 @@
       "binding": "MATTER_SYNC",
       "class_name": "MatterSyncWorkflow",
       "schedules": ["0 6 * * *"]
+    },
+    {
+      "name": "book",
+      "binding": "BOOK",
+      "class_name": "BookWorkflow"
     }
   ]
 }

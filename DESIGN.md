@@ -62,14 +62,15 @@ Matter hosts article images on its own CDN; the wiki and the book load images by
 
 ## Book
 
-A book is one export batch of archived sources laid out as chapters. The first export includes all archived sources. Each later export includes sources archived after the previous completed export and at or before a cutoff captured when the new export starts.
+A book is one export batch of archived sources laid out as chapters. X posts are excluded because Matter does not provide usable article content for them. The first export includes all other archived sources. Each later export includes eligible sources archived after the previous completed export and at or before a cutoff captured when the new export starts.
 
-The print format is a 6 × 9 inch US Trade paperback with Perfect Bound binding, a Premium Color interior on 80# White Coated paper, and a matte cover. The Lulu pod package ID is `0600X0900.FC.PRE.PB.080CW444.MXX`.
+The print format is an 8.5 × 11 inch (216 × 279 mm) US Letter paperback with Perfect Bound binding, a Premium Color interior on 80# White Coated paper, and a matte cover. Full-bleed interior pages are 8.75 × 11.25 inches (222.35 × 285.35 mm). The Lulu pod package ID is `0850X1100.FC.PRE.PB.080CW444.MXX`.
 
-1. **Plan** — a model uses the links, embeddings, and source titles to group the selected sources into chapters, order them, and write a short title for each chapter. No introduction or other prose is written.
-2. **Interior** — articles and their native blog images are reflowed into print HTML (trim size, margins, running heads, page numbers, table of contents, per-article title block with author, site, and date archived) and rendered in color to `interior.pdf`.
-3. **Cover** — a generated image and typography are laid out using the interior page count and the printer's spine calculation, then rendered to `cover.pdf` for a matte finish.
-4. **Order** — price quote, confirmation, print job via Lulu's API, status until shipped. Both PDFs stay downloadable for any other printer.
+1. **Plan** — a model uses the links, embeddings, and source titles to group and order the selected sources. It writes one concise literary book title and one distinct, evocative title for each chapter. No introduction or other prose is written.
+2. **Artwork** — FAL uses one reusable Recraft V4 Styles Pro style learned from the approved reference images. It generates one text-free outer-cover source image and one image for each grouped chapter, never one per article. The shared direction is abstract nature-focused 2D editorial illustration with matte pastel color fields, tactile paper or gouache texture, simplified subjects, and generous negative space. Generated assets are downloaded into R2 and reused on retries.
+3. **Interior** — the generated cover artwork fills the title page and every grouped chapter starts with its own full-bleed artwork page and separately rendered title. Article text then flows continuously through a balanced two-column magazine-style layout without a center rule; each article starts in the next available column. Images with a landscape ratio of at least 1.25 and enough pixels for at least 150 PPI at the full text width span both columns; smaller, near-square, and portrait images stay within one column. Logo images and repository status badges are omitted. The interior also has the trim size, margins, page numbers, a two-column table of contents with chapter and article page references, and per-article title blocks, and is rendered in color to `interior.pdf`.
+4. **Cover** — after the final interior page count is known, the stored cover artwork and deterministic typography are laid out using the printer's spine calculation, then rendered to `cover.pdf` for a matte finish.
+5. **Order** — price quote, confirmation, print job via Lulu's API, status until shipped. Both PDFs stay downloadable for any other printer.
 
 An export is complete only after both PDFs are generated successfully. Its cutoff then becomes the starting point for the next export; previews and failed exports do not advance it.
 

@@ -1,2 +1,6 @@
 # Matter personal access token (web.getmatter.com/settings → Generate API Token)
 MATTER_API_TOKEN=mat_...
+
+# fal.ai server key and reusable Recraft V4 Pro style created from the approved reference images
+FAL_KEY=key_id:key_secret
+FAL_STYLE_ID=00000000-0000-0000-0000-000000000000
