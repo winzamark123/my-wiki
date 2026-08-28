@@ -19,7 +19,9 @@
   "cache": { "enabled": true },
   "vars": {
     "ENVIRONMENT": "development",
-    "FRONTEND_URL": "http://localhost:5173"
+    "FRONTEND_URL": "http://localhost:5173",
+    "LULU_BASE_URL": "https://api.sandbox.lulu.com",
+    "BOOK_POD_PACKAGE_ID": "0850X1100.FC.PRE.PB.080CW444.MXX"
   },
   "ai": { "binding": "AI" },
   "browser": { "binding": "BROWSER", "remote": true },
