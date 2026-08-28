@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { latestSourceCutoff, materializeChapterPlan, normalizeChapterTitle, selectExportSources } from "./books";
+import {
+  bookStatusSchema,
+  latestSourceCutoff,
+  materializeChapterPlan,
+  normalizeChapterTitle,
+  selectExportSources,
+} from "./books";
 import type { SourceMeta } from "./sources";
 
 function source({
@@ -26,6 +32,24 @@ function source({
     matter_updated_at: "2026-08-25T00:00:00.000Z",
   };
 }
+
+describe("bookStatusSchema", () => {
+  it("accepts ready and failed cover states with Lulu dimensions", () => {
+    const base = {
+      page_count: 132,
+      unavailable_images: [],
+      updated_at: "2026-08-28T00:00:00.000Z",
+    };
+    const coverDimensions = { width: 17.607, height: 11.25, unit: "inch" };
+
+    expect(
+      bookStatusSchema.parse({ ...base, state: "cover_ready", cover_dimensions: coverDimensions }),
+    ).toMatchObject({ state: "cover_ready", cover_dimensions: coverDimensions });
+    expect(
+      bookStatusSchema.parse({ ...base, state: "cover_failed", cover_dimensions: coverDimensions, error: "failed" }),
+    ).toMatchObject({ state: "cover_failed", error: "failed" });
+  });
+});
 
 describe("normalizeChapterTitle", () => {
   it("removes redundant model-generated chapter numbering", () => {

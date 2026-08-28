@@ -25,7 +25,6 @@ describe("renderInteriorHtml", () => {
     const html = renderInteriorHtml({
       manifest,
       artwork: {
-        cover: "data:image/png;base64,Y292ZXI=",
         chapters: [{ chapterIndex: 0, title: "Ideas < Practice", src: "data:image/png;base64,Y2hhcHRlcg==" }],
       },
       sources: [
@@ -53,7 +52,8 @@ describe("renderInteriorHtml", () => {
     expect(html).toContain("@page artwork");
     expect(html).toContain("width: 100vw");
     expect(html).toContain("height: 100vh");
-    expect(html).toContain('class="title-page artwork-page"');
+    expect(html).toContain('class="title-page"');
+    expect(html).toContain("background: #f7f2e5");
     expect(html).toContain('data-book-artwork="true"');
     expect(html).toContain("Ways of Becoming");
     expect(html).toContain('<section class="chapter-content">');
@@ -77,7 +77,6 @@ describe("renderInteriorHtml", () => {
       renderInteriorHtml({
         manifest,
         artwork: {
-          cover: "data:image/png;base64,Y292ZXI=",
           chapters: [{ chapterIndex: 0, title: "Ideas < Practice", src: "data:image/png;base64,Y2hhcHRlcg==" }],
         },
         sources: [],
@@ -89,7 +88,7 @@ describe("renderInteriorHtml", () => {
     expect(() =>
       renderInteriorHtml({
         manifest,
-        artwork: { cover: "data:image/png;base64,Y292ZXI=", chapters: [] },
+        artwork: { chapters: [] },
         sources: [
           {
             meta: {
