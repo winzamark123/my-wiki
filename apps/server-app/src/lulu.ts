@@ -1,42 +1,27 @@
+// Lulu Print API client. see ARCHITECTURE.md → External APIs → Lulu
 import { z } from "zod";
 
+const TOKEN_PATH = "/auth/realms/glasstree/protocol/openid-connect/token";
 const TOKEN_EXPIRY_BUFFER_MS = 60_000;
-
-const luluConfigSchema = z.object({
-  baseUrl: z.url(),
-  clientKey: z.string().min(1),
-  clientSecret: z.string().min(1),
-});
 
 const tokenSchema = z.object({
   access_token: z.string().min(1),
   expires_in: z.number().positive(),
-  token_type: z.string().min(1),
 });
 
-export const luluDimensionUnitSchema = z.enum(["pt", "mm", "inch"]);
+const dimensionUnitSchema = z.enum(["pt", "mm", "inch"]);
 
-const dimensionSchema = z
-  .union([z.number(), z.string().regex(/^\d+(?:\.\d+)?$/)])
-  .transform(Number)
-  .pipe(z.number().positive());
-
+// lulu returns numbers as strings, e.g. "1263.000"
 const coverDimensionsSchema = z.object({
-  width: dimensionSchema,
-  height: dimensionSchema,
-  unit: luluDimensionUnitSchema,
+  width: z.coerce.number().positive(),
+  height: z.coerce.number().positive(),
+  unit: dimensionUnitSchema,
 });
-
-const pageCountSchema = z
-  .union([z.number(), z.string().regex(/^\d+$/)])
-  .transform(Number)
-  .pipe(z.number().int().nonnegative())
-  .nullish();
 
 const validationBaseSchema = z.object({
   id: z.number().int().positive(),
   source_url: z.url(),
-  page_count: pageCountSchema,
+  page_count: z.coerce.number().int().nonnegative().nullish(),
   errors: z.array(z.string()).nullish(),
 });
 
@@ -49,19 +34,8 @@ const coverValidationSchema = validationBaseSchema.extend({
   status: z.enum(["NULL", "NORMALIZING", "NORMALIZED", "ERROR"]),
 });
 
-const errorResponseSchema = z.record(z.string(), z.union([z.string(), z.array(z.string())]));
-
 function redact({ text, secrets }: { text: string; secrets: string[] }) {
   return secrets.reduce((safe, secret) => (secret ? safe.replaceAll(secret, "[redacted]") : safe), text).slice(0, 500);
-}
-
-function parseJson(text: string) {
-  try {
-    const data: unknown = JSON.parse(text);
-    return { data };
-  } catch {
-    return { data: undefined };
-  }
 }
 
 async function parseResponse<T extends z.ZodType>({
@@ -76,17 +50,16 @@ async function parseResponse<T extends z.ZodType>({
   secrets: string[];
 }) {
   const text = await response.text();
-  const { data } = parseJson(text);
   if (!response.ok) {
-    const error = errorResponseSchema.safeParse(data);
-    const details = redact({
-      text: error.success ? JSON.stringify(error.data) : text,
-      secrets,
-    }) || "empty response";
-    throw new Error(`lulu ${path} → ${response.status}: ${details}`);
+    throw new Error(`lulu ${path} → ${response.status}: ${redact({ text, secrets }) || "empty response"}`);
   }
-  if (data === undefined) throw new Error(`lulu ${path} → ${response.status}: invalid JSON response`);
 
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`lulu ${path} → ${response.status}: invalid JSON response`);
+  }
   const result = schema.safeParse(data);
   if (!result.success) {
     throw new Error(`lulu ${path} → ${response.status}: invalid response: ${z.prettifyError(result.error)}`);
@@ -98,67 +71,55 @@ export function createLuluClient({
   baseUrl,
   clientKey,
   clientSecret,
-  now = Date.now,
 }: {
   baseUrl: string;
   clientKey: string;
   clientSecret: string;
-  now?: () => number;
 }) {
-  const config = luluConfigSchema.parse({ baseUrl, clientKey, clientSecret });
-  const origin = config.baseUrl.replace(/\/+$/, "");
-  let token: { value: string; expiresAt: number } | undefined;
+  // cached as a promise so concurrent callers share one token request
+  let token: Promise<{ value: string; expiresAt: number }> | undefined;
 
-  async function getAccessToken() {
-    if (token && now() < token.expiresAt - TOKEN_EXPIRY_BUFFER_MS) return token.value;
-
-    const path = "/auth/realms/glasstree/protocol/openid-connect/token";
-    const response = await fetch(`${origin}${path}`, {
+  async function fetchToken() {
+    const response = await fetch(`${baseUrl}${TOKEN_PATH}`, {
       method: "POST",
       headers: {
-        Authorization: `Basic ${btoa(`${config.clientKey}:${config.clientSecret}`)}`,
+        Authorization: `Basic ${btoa(`${clientKey}:${clientSecret}`)}`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({ grant_type: "client_credentials" }),
     });
     const result = await parseResponse({
       response,
-      path,
+      path: TOKEN_PATH,
       schema: tokenSchema,
-      secrets: [config.clientKey, config.clientSecret],
+      secrets: [clientKey, clientSecret],
     });
-    token = {
-      value: result.access_token,
-      expiresAt: now() + result.expires_in * 1000,
-    };
-    return token.value;
+    return { value: result.access_token, expiresAt: Date.now() + result.expires_in * 1000 };
   }
 
-  async function request<T extends z.ZodType>({
-    path,
-    method,
-    body,
-    schema,
-  }: {
-    path: string;
-    method: "GET" | "POST";
-    body?: unknown;
-    schema: T;
-  }) {
+  async function getAccessToken() {
+    const cached = token && (await token);
+    if (cached && Date.now() < cached.expiresAt - TOKEN_EXPIRY_BUFFER_MS) return cached.value;
+
+    token = fetchToken().catch((error: unknown) => {
+      token = undefined;
+      throw error;
+    });
+    return (await token).value;
+  }
+
+  async function request<T extends z.ZodType>({ path, body, schema }: { path: string; body?: unknown; schema: T }) {
     const accessToken = await getAccessToken();
-    const response = await fetch(`${origin}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      },
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     return parseResponse({
       response,
       path,
       schema,
-      secrets: [config.clientKey, config.clientSecret, accessToken],
+      secrets: [clientKey, clientSecret, accessToken],
     });
   }
 
@@ -170,16 +131,11 @@ export function createLuluClient({
     }: {
       podPackageId: string;
       interiorPageCount: number;
-      unit: z.infer<typeof luluDimensionUnitSchema>;
+      unit: z.infer<typeof dimensionUnitSchema>;
     }) {
       return request({
         path: "/cover-dimensions/",
-        method: "POST",
-        body: {
-          pod_package_id: podPackageId,
-          interior_page_count: interiorPageCount,
-          unit,
-        },
+        body: { pod_package_id: podPackageId, interior_page_count: interiorPageCount, unit },
         schema: coverDimensionsSchema,
       });
     },
@@ -187,18 +143,13 @@ export function createLuluClient({
     startInteriorValidation({ sourceUrl, podPackageId }: { sourceUrl: string; podPackageId: string }) {
       return request({
         path: "/validate-interior/",
-        method: "POST",
         body: { source_url: sourceUrl, pod_package_id: podPackageId },
         schema: interiorValidationSchema,
       });
     },
 
     getInteriorValidation({ id }: { id: number }) {
-      return request({
-        path: `/validate-interior/${id}/`,
-        method: "GET",
-        schema: interiorValidationSchema,
-      });
+      return request({ path: `/validate-interior/${id}/`, schema: interiorValidationSchema });
     },
 
     startCoverValidation({
@@ -212,22 +163,13 @@ export function createLuluClient({
     }) {
       return request({
         path: "/validate-cover/",
-        method: "POST",
-        body: {
-          source_url: sourceUrl,
-          pod_package_id: podPackageId,
-          interior_page_count: interiorPageCount,
-        },
+        body: { source_url: sourceUrl, pod_package_id: podPackageId, interior_page_count: interiorPageCount },
         schema: coverValidationSchema,
       });
     },
 
     getCoverValidation({ id }: { id: number }) {
-      return request({
-        path: `/validate-cover/${id}/`,
-        method: "GET",
-        schema: coverValidationSchema,
-      });
+      return request({ path: `/validate-cover/${id}/`, schema: coverValidationSchema });
     },
   };
 }
