@@ -3,7 +3,7 @@ import { Marked } from "marked";
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRef, StandardFonts, rgb } from "pdf-lib";
 import { z } from "zod";
 
-import type { BookArtworkDataUrls } from "./artwork";
+import type { BookChapterArtworkDataUrls } from "./artwork";
 import type { BookManifest } from "./books";
 import type { SourceMeta } from "./sources";
 
@@ -110,7 +110,7 @@ export function renderInteriorHtml({
 }: {
   manifest: BookManifest;
   sources: BookSource[];
-  artwork: BookArtworkDataUrls;
+  artwork: BookChapterArtworkDataUrls;
 }) {
   const sourceById = new Map(sources.map((source) => [source.meta.matter_id, source]));
   const chapterArtworkByIndex = new Map(artwork.chapters.map((chapter) => [chapter.chapterIndex, chapter]));
@@ -222,8 +222,21 @@ export function renderInteriorHtml({
       color: #17302f;
       background: rgba(247, 242, 229, 0.92);
     }
+    .title-page {
+      page: artwork;
+      display: grid;
+      width: 100vw;
+      height: 100vh;
+      padding: 1.25in;
+      place-items: center;
+      break-after: page;
+      color: #17302f;
+      background: #f7f2e5;
+      text-align: center;
+    }
     .title-page h1 {
-      margin: 0.12in 0;
+      max-width: 6.25in;
+      margin: 0.16in 0;
       font-size: 34pt;
       font-weight: 400;
       line-height: 1.02;
@@ -380,9 +393,8 @@ export function renderInteriorHtml({
   </style>
 </head>
 <body>
-  <section class="title-page artwork-page">
-    <img class="artwork-background" data-book-artwork="true" src="${escapeHtml(artwork.cover)}" alt="Artwork for ${escapeHtml(manifest.title)}">
-    <div class="artwork-copy title-page-copy">
+  <section class="title-page">
+    <div>
       <p>Personal reading archive</p>
       <h1>${escapeHtml(manifest.title)}</h1>
       <p>${articleCount} articles · ${manifest.created_at.slice(0, 10)}</p>

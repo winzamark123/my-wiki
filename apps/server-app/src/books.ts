@@ -81,15 +81,34 @@ export const bookIndexSchema = z.object({
   ),
 });
 
-export const bookStatusSchema = z.object({
-  state: z.literal("interior_ready"),
+const bookStatusBaseSchema = z.object({
   page_count: z.number().int(),
   unavailable_images: z.array(z.string()),
   updated_at: timestampSchema,
 });
 
+export const bookCoverDimensionsSchema = z.object({
+  width: z.number().positive(),
+  height: z.number().positive(),
+  unit: z.literal("inch"),
+});
+
+export const bookStatusSchema = z.discriminatedUnion("state", [
+  bookStatusBaseSchema.extend({ state: z.literal("interior_ready") }),
+  bookStatusBaseSchema.extend({
+    state: z.literal("cover_ready"),
+    cover_dimensions: bookCoverDimensionsSchema,
+  }),
+  bookStatusBaseSchema.extend({
+    state: z.literal("cover_failed"),
+    cover_dimensions: bookCoverDimensionsSchema.optional(),
+    error: z.string().min(1),
+  }),
+]);
+
 export type BookManifest = z.infer<typeof bookManifestSchema>;
 export type BookIndex = z.infer<typeof bookIndexSchema>;
+export type BookCoverDimensions = z.infer<typeof bookCoverDimensionsSchema>;
 export type BookStatus = z.infer<typeof bookStatusSchema>;
 type ModelChapterPlan = z.infer<typeof modelChapterPlanSchema>;
 

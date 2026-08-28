@@ -40,8 +40,7 @@ export const bookArtworkSchema = z.object({
 
 export type BookArtwork = z.infer<typeof bookArtworkSchema>;
 export type BookArtworkAsset = z.infer<typeof bookArtworkAssetSchema>;
-export type BookArtworkDataUrls = {
-  cover: string;
+export type BookChapterArtworkDataUrls = {
   chapters: { chapterIndex: number; title: string; src: string }[];
 };
 

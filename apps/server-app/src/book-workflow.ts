@@ -8,19 +8,34 @@ import {
   createFalArtworkGenerator,
   type BookArtworkAsset,
 } from "./artwork";
+import { renderCoverHtml, renderCoverPdf } from "./book-cover";
 import { renderInteriorHtml, renderInteriorPdf } from "./book-interior";
 import {
-  getBookArtworkDataUrls,
+  getBookChapterArtworkDataUrls,
+  getBookCoverArtworkDataUrl,
   getBookIndex,
+  getBookStatus,
+  getCoverHtml,
   getInteriorHtml,
   writeArtworkImage,
   writeBookArtwork,
   writeBookManifest,
+  writeCoverFailure,
+  writeCoverHtml,
+  writeCoverPdf,
   writeInteriorHtml,
   writeInteriorPdf,
 } from "./book-store";
-import { bookManifestSchema, createChapterPlan, latestSourceCutoff, selectExportSources } from "./books";
+import {
+  bookCoverDimensionsSchema,
+  bookManifestSchema,
+  createChapterPlan,
+  latestSourceCutoff,
+  selectExportSources,
+  type BookCoverDimensions,
+} from "./books";
 import { getEmbeddingStore } from "./embeddings";
+import { createLuluClient } from "./lulu";
 import { getSource } from "./source-store";
 import { getIndex } from "./wiki-index";
 
@@ -151,7 +166,7 @@ export class BookWorkflow extends WorkflowEntrypoint<Env, BookWorkflowParams> {
           return source;
         }),
       );
-      const artworkDataUrls = await getBookArtworkDataUrls({ bucket: this.env.WIKI, artwork });
+      const artworkDataUrls = await getBookChapterArtworkDataUrls({ bucket: this.env.WIKI, artwork });
       const html = renderInteriorHtml({ manifest, sources, artwork: artworkDataUrls });
       await writeInteriorHtml({ bucket: this.env.WIKI, bookId: manifest.id, html });
       return { bytes: new TextEncoder().encode(html).byteLength };
@@ -179,16 +194,91 @@ export class BookWorkflow extends WorkflowEntrypoint<Env, BookWorkflowParams> {
       },
     );
 
-    return {
-      id: manifest.id,
-      sources: selection.sources.length,
-      chapters: manifest.chapters.length,
-      pageCount: interior.pageCount,
-      artwork: {
-        count: artwork.chapters.length + 1,
-        width: artwork.cover.width,
-        height: artwork.cover.height,
-      },
-    };
+    const interiorStatus = await step.do("read interior status", async () => {
+      const status = await getBookStatus({ bucket: this.env.WIKI, bookId: manifest.id });
+      if (status.state !== "interior_ready") throw new Error(`book ${manifest.id} is not ready for its cover`);
+      return status;
+    });
+    const lulu = createLuluClient({
+      baseUrl: this.env.LULU_BASE_URL,
+      clientKey: this.env.LULU_CLIENT_KEY,
+      clientSecret: this.env.LULU_CLIENT_SECRET,
+    });
+    let coverDimensions: BookCoverDimensions | undefined;
+    try {
+      const dimensions = await step.do(
+        "calculate cover dimensions",
+        { retries: EXTERNAL_RETRIES, timeout: "1 minute" },
+        async () =>
+          bookCoverDimensionsSchema.parse(
+            await lulu.calculateCoverDimensions({
+              podPackageId: this.env.BOOK_POD_PACKAGE_ID,
+              interiorPageCount: interiorStatus.page_count,
+              unit: "inch",
+            }),
+          ),
+      );
+      coverDimensions = dimensions;
+
+      await step.do("render cover HTML", async () => {
+        const coverArtwork = await getBookCoverArtworkDataUrl({ bucket: this.env.WIKI, artwork });
+        const html = renderCoverHtml({
+          title: manifest.title,
+          artwork: coverArtwork,
+          dimensions,
+          pageCount: interiorStatus.page_count,
+        });
+        await writeCoverHtml({ bucket: this.env.WIKI, bookId: manifest.id, html });
+        return { bytes: new TextEncoder().encode(html).byteLength };
+      });
+
+      const outerCover = await step.do(
+        "render cover PDF",
+        { retries: EXTERNAL_RETRIES, timeout: "10 minutes" },
+        async () => {
+          const html = await getCoverHtml({ bucket: this.env.WIKI, bookId: manifest.id });
+          const rendered = await renderCoverPdf({
+            browserBinding: this.env.BROWSER,
+            html,
+            dimensions,
+          });
+          await writeCoverPdf({
+            bucket: this.env.WIKI,
+            bookId: manifest.id,
+            html: rendered.html,
+            pdf: rendered.pdf,
+            interiorStatus,
+            dimensions,
+            now: new Date().toISOString(),
+          });
+          return { bytes: rendered.pdf.byteLength, coverTone: rendered.coverTone };
+        },
+      );
+
+      return {
+        id: manifest.id,
+        sources: selection.sources.length,
+        chapters: manifest.chapters.length,
+        pageCount: interior.pageCount,
+        artwork: {
+          count: artwork.chapters.length + 1,
+          width: artwork.cover.width,
+          height: artwork.cover.height,
+        },
+        cover: { ...dimensions, tone: outerCover.coverTone },
+      };
+    } catch (error) {
+      await step.do("record cover failure", () =>
+        writeCoverFailure({
+          bucket: this.env.WIKI,
+          bookId: manifest.id,
+          interiorStatus,
+          dimensions: coverDimensions,
+          error: error instanceof Error ? error.message.slice(0, 1_000) : String(error).slice(0, 1_000),
+          now: new Date().toISOString(),
+        }),
+      );
+      throw error;
+    }
   }
 }
