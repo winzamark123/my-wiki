@@ -8,7 +8,7 @@ The pnpm workspace has a static Vite application in `apps/app` and a Cloudflare 
 
 ```sh
 pnpm install
-cp apps/server-app/.dev.vars.example apps/server-app/.dev.vars   # Matter API token
+cp apps/server-app/.dev.vars.example apps/server-app/.dev.vars   # Matter, Lulu sandbox, and fal.ai credentials
 pnpm dev                                                      # Vite app :5173, server-app :8787
 curl -X POST "localhost:8787/api/sync?full=1"                  # pull the Matter queue + archive into the local bucket
 curl "localhost:8787/api/sync/<instance id>"                   # sync status
